@@ -14,6 +14,25 @@ import 'utils/date_format_util.dart';
 /// 用于自定义价格显示格式，例如添加货币符号、千分位分隔符等
 typedef PriceFormatter = String Function(double price);
 
+/// 视口状态快照
+/// 用于在数据更新后恢复视口位置
+class ViewportSnapshot {
+  /// 快照时数据的总长度
+  final int dataLength;
+
+  /// 快照时的 scrollX 值
+  final double scrollX;
+
+  /// 快照时的 scaleX 值
+  final double scaleX;
+
+  const ViewportSnapshot({
+    required this.dataLength,
+    required this.scrollX,
+    required this.scaleX,
+  });
+}
+
 /// 主图指标状态枚举
 /// MA: 移动平均线 (Moving Average)
 /// BOLL: 布林带 (Bollinger Bands)
@@ -143,6 +162,9 @@ class CandlestickWidget extends StatefulWidget {
   /// 图表右侧留白距离（用于显示最新数据时留出空间）
   final double xFrontPadding;
 
+  /// 图表左侧留白距离（用于显示最早数据时留出空间）
+  final double xBackPadding;
+
   /// 自定义价格格式化函数
   final PriceFormatter? priceFormatter;
 
@@ -154,13 +176,45 @@ class CandlestickWidget extends StatefulWidget {
 
   /// 滑动到边界时的回调
   /// [isLeft] 为 true 表示到达左边界（最早数据），false 表示到达右边界（最新数据）
-  final Function(bool isLeft)? onReachBoundary;
+  ///
+  /// 支持同步和异步函数：
+  /// - 同步: `(isLeft) { loadData(isLeft); }`
+  /// - 异步: `(isLeft) async { await loadData(isLeft); }`
+  ///
+  /// 加载成功后会自动隐藏加载指示器
+  /// 加载失败时会显示错误组件（如果提供了 loadingErrorBuilder）或隐藏指示器
+  final FutureOr<void> Function(bool isLeft)? onReachBoundary;
 
   /// 是否启用自动切换分时图模式（缩放到阈值以下时自动切换）
   final bool autoSwitchToLine;
 
   /// 切换到分时图的缩放阈值（默认 0.5）
   final double lineThreshold;
+
+  /// 水平拖动灵敏度系数（默认 1.0）
+  /// 值越小，拖动时图表移动越慢，需要更多手指移动才能滚动相同距离
+  /// 例如：0.5 表示灵敏度减半，需要滑动两倍距离；2.0 表示灵敏度加倍
+  final double panSensitivity;
+
+  /// 加载指示器构建器
+  /// 当到达边界并触发加载更多数据时显示
+  /// [isLeft] 为 true 表示在左侧(历史数据)加载，false 表示在右侧(最新数据)加载
+  final Widget Function(bool isLeft)? loadingIndicatorBuilder;
+
+  /// 加载错误组件构建器
+  /// 当加载失败时显示，如果不提供则直接隐藏指示器
+  /// [isLeft] 为 true 表示在左侧加载失败，false 表示在右侧加载失败
+  /// [error] 错误对象
+  /// [retry] 重试函数，调用后会重新触发加载
+  final Widget Function(bool isLeft, Object error, VoidCallback retry)? loadingErrorBuilder;
+
+  /// 边界触发的最小拖拽距离(像素)，默认 50
+  /// 用户在边界继续滑动超过此距离后才会触发 onReachBoundary 回调
+  final double boundaryThreshold;
+
+  /// 防抖延迟时间(毫秒)，默认 1000
+  /// 两次 onReachBoundary 回调之间的最小间隔，防止重复触发
+  final int debounceDelay;
 
   const CandlestickWidget(
     this.datas,
@@ -169,6 +223,7 @@ class CandlestickWidget extends StatefulWidget {
     super.key,
     required this.isTrendLine,
     this.xFrontPadding = 100,
+    this.xBackPadding = 100,
     this.mainStateLi = const <MainState>{},
     this.secondaryStateLi = const <SecondaryState>{},
     // this.onSecondaryTap,
@@ -196,6 +251,11 @@ class CandlestickWidget extends StatefulWidget {
     this.onReachBoundary,
     this.autoSwitchToLine = false,
     this.lineThreshold = 0.5,
+    this.panSensitivity = 1.0,
+    this.loadingIndicatorBuilder,
+    this.loadingErrorBuilder,
+    this.boundaryThreshold = 50.0,
+    this.debounceDelay = 1000,
   });
 
   @override
@@ -259,11 +319,25 @@ class _CandlestickWidgetState extends State<CandlestickWidget>
     return mScaleX;
   }
 
-  /// 记录上一次的缩放倍数（用于增量缩放计算）
-  double _lastScale = 1.0;
+  /// 当前触摸屏幕的手指数量（通过 Listener 实时跟踪）
+  int _pointerCount = 0;
 
-  /// 初始触摸点数量（用于区分单指拖拽和双指缩放）
-  int _initialPointerCount = 1;
+  /// 上一次处理手势时的手指数量（用于检测 1->2 或 2->1 的过渡）
+  int _lastPointerCount = 0;
+
+  /// 手势开始时的缩放倍数基线（用于相对缩放计算）
+  double _scaleBase = 1.0;
+
+  /// 手势开始时的 mScaleX 基线（用于相对缩放计算）
+  double _scaleXBase = 1.0;
+
+  /// 锚点：焦点下对应的数据索引
+  /// 用于缩放时保持焦点位置不变
+  int _anchorIndex = 0;
+
+  /// 焦点的屏幕 X 坐标
+  /// 用于在缩放后将锚点索引重新定位到该位置
+  double _anchorScreenX = 0.0;
 
   /// 手势状态标志
   /// isScale: 是否正在缩放
@@ -275,6 +349,15 @@ class _CandlestickWidgetState extends State<CandlestickWidget>
   /// 边界处累积的滑动距离，用于触发 onReachBoundary
   /// 当用户在边界继续滑动超过阈值（50像素）时，触发加载更多回调
   double _boundaryOverscroll = 0.0;
+
+  /// 加载状态：true 表示左侧正在加载，false 表示右侧正在加载，null 表示未加载
+  bool? _isLoadingAtLeft;
+
+  /// 加载错误信息：存储最近的加载错误
+  Object? _loadingError;
+
+  /// 上次触发 onReachBoundary 的时间戳，用于防抖
+  int? _lastBoundaryTriggerTime;
 
   @override
   void initState() {
@@ -319,6 +402,7 @@ class _CandlestickWidgetState extends State<CandlestickWidget>
       lines: lines, // 趋势线列表
       sink: mInfoWindowStream.sink, // 信息弹窗数据流
       xFrontPadding: widget.xFrontPadding,
+      xBackPadding: widget.xBackPadding,
       isTrendLine: widget.isTrendLine, // 是否启用趋势线
       selectY: mSelectY, // 选中的 Y 坐标（趋势线用）
       datas: widget.datas,
@@ -348,118 +432,160 @@ class _CandlestickWidgetState extends State<CandlestickWidget>
         mHeight = constraints.maxHeight;
         mWidth = constraints.maxWidth;
 
-        // 使用 RawGestureDetector 组合多种手势识别器
-        // 这是实现复杂手势交互的关键
-        return RawGestureDetector(
-          behavior: HitTestBehavior.opaque, // 确保空白区域也能接收事件
-          gestures: <Type, GestureRecognizerFactory>{
-            // ========== 1. 水平拖拽手势 - 实现图表滚动 ==========
-            HorizontalDragGestureRecognizer:
-                GestureRecognizerFactoryWithHandlers<
-                    HorizontalDragGestureRecognizer>(
-              () => HorizontalDragGestureRecognizer(),
-              (HorizontalDragGestureRecognizer instance) {
-                instance
-                  // 拖拽开始
-                  ..onStart = (details) {
-                    isScale = true;
-                    isOnTap = false;
-                    _initialPointerCount = 1;
-                    _boundaryOverscroll = 0.0; // 重置边界滑动累积
-                    _stopAnimation(); // 停止正在进行的惯性滚动动画
-                    _onDragChanged(true); // 通知拖拽状态改变
-                  }
-                  // 拖拽更新 - 核心滚动逻辑
-                  ..onUpdate = (details) {
-                    // 长按状态下不处理拖拽（避免与十字线冲突）
-                    if (isLongPress) return;
-
-                    // 计算滚动距离
-                    // delta.dx: 本次移动的像素距离
-                    // delta / mScaleX: 转换为逻辑距离（考虑缩放）
-                    final delta = details.delta.dx;
-                    mScrollX = (delta / mScaleX + mScrollX)
-                        .clamp(0.0, ChartPainter.maxScrollX)
-                        .toDouble();
-
-                    // ===== 边界检测和加载更多逻辑 =====
-                    if (widget.onReachBoundary != null) {
-                      // 情况1: 在左边界（历史数据端）且向右滑动
-                      if (mScrollX <= 0 && delta > 0) {
-                        _boundaryOverscroll += delta;
-                        // 累积超过 50 像素时触发回调
-                        if (_boundaryOverscroll > 50) {
-                          widget.onReachBoundary!(true); // true = 左边界
-                          _boundaryOverscroll = 0.0; // 重置累积
-                        }
-                      }
-                      // 情况2: 在右边界（最新数据端）且向左滑动
-                      else if (mScrollX >= ChartPainter.maxScrollX &&
-                          ChartPainter.maxScrollX > 0 &&
-                          delta < 0) {
-                        _boundaryOverscroll += delta.abs();
-                        if (_boundaryOverscroll > 50) {
-                          widget.onReachBoundary!(false); // false = 右边界
-                          _boundaryOverscroll = 0.0;
-                        }
-                      } else {
-                        // 不在边界，重置累积
-                        _boundaryOverscroll = 0.0;
-                      }
-                    }
-                    notifyChanged(); // 触发重绘
-                  }
-                  // 拖拽结束 - 启动惯性滚动
-                  ..onEnd = (details) {
-                    isScale = false;
-                    _onDragChanged(false);
-                    // 获取手指离开时的速度，用于惯性滚动
-                    var velocity = details.velocity.pixelsPerSecond.dx;
-                    _onFling(velocity);
-                  };
-              },
-            ),
-
-            // ========== 2. 缩放手势 - 实现双指缩放 ==========
-            ScaleGestureRecognizer:
-                GestureRecognizerFactoryWithHandlers<ScaleGestureRecognizer>(
-              () => ScaleGestureRecognizer(),
-              (ScaleGestureRecognizer instance) {
-                instance
-                  // 缩放开始
-                  ..onStart = (details) {
-                    // 只有双指及以上才处理缩放
-                    if (details.pointerCount >= 2) {
-                      isScale = true;
-                      _initialPointerCount = details.pointerCount;
+        // ========== 使用 Listener 跟踪手指数量 ==========
+        // 这是实现平滑手势过渡的关键
+        return Listener(
+          onPointerDown: (_) => setState(() => _pointerCount++),
+          onPointerUp: (_) => setState(() => _pointerCount--),
+          onPointerCancel: (_) => setState(() => _pointerCount--),
+          child: RawGestureDetector(
+            behavior: HitTestBehavior.opaque, // 确保空白区域也能接收事件
+            gestures: <Type, GestureRecognizerFactory>{
+              // ========== 统一的缩放手势 - 同时处理拖拽和缩放 ==========
+              // 移除了 HorizontalDragGestureRecognizer 以避免手势竞技场冲突
+              ScaleGestureRecognizer:
+                  GestureRecognizerFactoryWithHandlers<ScaleGestureRecognizer>(
+                () => ScaleGestureRecognizer(),
+                (ScaleGestureRecognizer instance) {
+                  instance
+                    // 手势开始
+                    ..onStart = (details) {
+                      isOnTap = false;
                       _stopAnimation(); // 停止惯性滚动
-                    }
-                  }
-                  // 缩放更新 - 核心缩放逻辑
-                  ..onUpdate = (details) {
-                    if (details.pointerCount >= 2) {
-                      // 计算新的缩放值
-                      // _lastScale: 上次的缩放倍数
-                      // details.scale: 本次相对上次的缩放比例
-                      // clamp(0.2, 4.0): 限制缩放范围在 0.2 ~ 4 倍
-                      mScaleX = (_lastScale * details.scale).clamp(0.2, 4.0);
 
-                      // 自动切换分时图模式
-                      // 当缩放到很小时（例如 0.5），自动切换为分时图
-                      if (widget.autoSwitchToLine) {
-                        _isAutoLine = mScaleX <= widget.lineThreshold;
+                      // 记录当前手指数量
+                      _lastPointerCount = _pointerCount;
+
+                      // 保存基线值，用于相对计算
+                      _scaleBase = 1.0; // 手势开始时总是 1.0
+                      _scaleXBase = mScaleX;
+
+                      // 计算锚点：焦点位置对应的数据索引和屏幕坐标
+                      // 这样缩放时可以保持焦点位置不变
+                      _anchorScreenX = details.focalPoint.dx;
+                      _anchorIndex = painter.calculateSelectedX(_anchorScreenX);
+
+                      _boundaryOverscroll = 0.0; // 重置边界滑动累积
+                      _onDragChanged(true); // 通知拖拽状态改变
+                    }
+                    // 手势更新 - 核心逻辑
+                    ..onUpdate = (details) {
+                      // 长按状态下不处理（避免与十字线冲突）
+                      if (isLongPress) return;
+
+                      // ===== 关键：检测手指数量变化，重置基线 =====
+                      // 从 1->2 或 2->1 时，焦点会从单指位置跳到两指中点
+                      // 必须重置锚点和基线，避免画面跳动
+                      if (_pointerCount != _lastPointerCount) {
+                        _scaleBase = details.scale;
+                        _scaleXBase = mScaleX;
+                        _anchorScreenX = details.focalPoint.dx;
+                        _anchorIndex = painter.calculateSelectedX(_anchorScreenX);
+                        _lastPointerCount = _pointerCount;
+                      }
+
+                      final isPinching = _pointerCount >= 2;
+
+                      if (!isPinching) {
+                        // ===== 单指模式：拖拽 =====
+                        // 使用 focalPointDelta 避免受焦点定义变化影响
+                        final dx = details.focalPointDelta.dx;
+                        // 应用灵敏度系数，保持与放大时一致的滑动速度
+                        final delta = (dx / mScaleX) * widget.panSensitivity;
+
+                        mScrollX = (mScrollX + delta)
+                            .clamp(0.0, ChartPainter.maxScrollX)
+                            .toDouble();
+
+                        // ===== 边界检测和加载更多逻辑 =====
+                        if (widget.onReachBoundary != null) {
+                          // 情况1: 在右边界（最新数据端）且向左滑动
+                          if (mScrollX <= 0 && dx < 0) {
+                            _boundaryOverscroll += dx.abs();
+                            if (_boundaryOverscroll > widget.boundaryThreshold) {
+                              _triggerBoundaryCallback(false);
+                              _boundaryOverscroll = 0.0;
+                            }
+                          }
+                          // 情况2: 在左边界（历史数据端）且向右滑动
+                          else if (mScrollX >= ChartPainter.maxScrollX &&
+                              ChartPainter.maxScrollX > 0 &&
+                              dx > 0) {
+                            _boundaryOverscroll += dx.abs();
+                            if (_boundaryOverscroll > widget.boundaryThreshold) {
+                              _triggerBoundaryCallback(true);
+                              _boundaryOverscroll = 0.0;
+                            }
+                          } else {
+                            _boundaryOverscroll = 0.0;
+                          }
+                        }
+
+                        isScale = false;
+                      } else {
+                        // ===== 双指模式：缩放 =====
+                        isScale = true;
+
+                        // 相对缩放（避免绝对 scale 导致的基线漂移）
+                        final relativeScale = details.scale / _scaleBase;
+                        final newScaleX = (_scaleXBase * relativeScale).clamp(0.2, 4.0);
+
+                        // 自动切换分时图模式
+                        if (widget.autoSwitchToLine) {
+                          _isAutoLine = newScaleX <= widget.lineThreshold;
+                        }
+
+                        // ===== 实现焦点锚定缩放 =====
+                        // 核心思路：缩放后调整 scrollX，使锚点索引仍显示在焦点位置
+                        //
+                        // 坐标系统回顾：
+                        // 1. getX(index) 返回索引的逻辑坐标
+                        // 2. translateXtoX(logicX) 将逻辑坐标转为屏幕坐标
+                        // 3. mScrollX 控制整体平移
+                        //
+                        // 目标：缩放后让 _anchorIndex 显示在 _anchorScreenX 位置
+
+                        // 计算锚点在缩放前的逻辑坐标
+                        final anchorLogicX = painter.getX(_anchorIndex);
+
+                        // 计算缩放后，要让锚点显示在 _anchorScreenX，需要的 mTranslateX
+                        // 公式推导：screenX = (logicX + mTranslateX) * scaleX
+                        // => mTranslateX = screenX / scaleX - logicX
+                        final newTranslateX = _anchorScreenX / newScaleX - anchorLogicX;
+
+                        // 从 mTranslateX 反推 mScrollX
+                        // 根据 base_chart_painter.dart 的公式：
+                        // mTranslateX = scrollX + getMinTranslateX()
+                        // => scrollX = mTranslateX - getMinTranslateX()
+                        final dataLen = painter.mDataLen;
+                        final pointWidth = painter.mPointWidth;
+                        // 使用动态边距：xFrontPadding / newScaleX
+                        final minTranslateX = -dataLen + mWidth / newScaleX - pointWidth / 2 - widget.xFrontPadding / newScaleX;
+                        final effectiveMinTranslateX = minTranslateX >= 0 ? 0.0 : minTranslateX;
+
+                        mScrollX = (newTranslateX - effectiveMinTranslateX)
+                            .clamp(0.0, ChartPainter.maxScrollX)
+                            .toDouble();
+
+                        mScaleX = newScaleX;
                       }
 
                       notifyChanged(); // 触发重绘
                     }
-                  }
-                  // 缩放结束
-                  ..onEnd = (details) {
-                    isScale = false;
-                    _lastScale = mScaleX; // 保存本次缩放值，供下次使用
-                  };
-              },
-            ),
+                    // 手势结束
+                    ..onEnd = (details) {
+                      isScale = false;
+                      _onDragChanged(false);
+
+                      // 只有单指拖拽才启动惯性滚动
+                      // 双指缩放不需要惯性
+                      if (_pointerCount == 0 && _lastPointerCount == 1) {
+                        var velocity = details.velocity.pixelsPerSecond.dx;
+                        _onFling(velocity);
+                      }
+                    };
+                },
+              ),
 
             // ========== 3. 点击手势 - 显示信息弹窗或绘制趋势线 ==========
             TapGestureRecognizer:
@@ -569,19 +695,23 @@ class _CandlestickWidgetState extends State<CandlestickWidget>
               },
             ),
           },
-          // 图表视图层级结构
-          child: Stack(
-            children: <Widget>[
-              // 底层：Canvas 绘制的图表
-              CustomPaint(
-                size: Size(double.infinity, baseDimension.mDisplayHeight),
-                painter: painter,
-              ),
-              // 顶层：信息弹窗（如果启用）
-              if (widget.showInfoDialog) _buildInfoDialog()
-            ],
-          ),
-        );
+            // 图表视图层级结构
+            child: Stack(
+              children: <Widget>[
+                // 底层：Canvas 绘制的图表
+                CustomPaint(
+                  size: Size(double.infinity, baseDimension.mDisplayHeight),
+                  painter: painter,
+                ),
+                // 顶层：信息弹窗（如果启用）
+                if (widget.showInfoDialog) _buildInfoDialog(),
+                // 加载指示器
+                if (_isLoadingAtLeft != null && widget.loadingIndicatorBuilder != null)
+                  _buildLoadingIndicator(),
+              ],
+            ),
+          ), // RawGestureDetector 结束
+        ); // Listener 结束
       },
     );
   }
@@ -616,29 +746,35 @@ class _CandlestickWidgetState extends State<CandlestickWidget>
 
     // 创建滚动动画
     // 起始值：当前滚动位置
-    // 结束值：当前位置 + 速度 × 衰减系数
+    // 结束值：当前位置 + 速度 × 衰减系数 × 灵敏度系数
     aniX = null;
-    aniX = Tween<double>(begin: mScrollX, end: x * widget.flingRatio + mScrollX)
-        .animate(CurvedAnimation(
+    aniX = Tween<double>(
+      begin: mScrollX,
+      end: (x * widget.flingRatio * widget.panSensitivity) + mScrollX,
+    ).animate(CurvedAnimation(
             parent: _controller!.view, curve: widget.flingCurve));
 
     // 监听动画值变化
     aniX!.addListener(() {
       mScrollX = aniX!.value;
 
-      // 到达左边界：停止动画并触发加载更多回调
+      // 到达右边界（最新数据）：停止动画并触发加载更多回调
       if (mScrollX <= 0) {
         mScrollX = 0;
+        _triggerBoundaryCallback(false); // false = 加载最新数据
+        // 兼容旧的 onLoadMore 回调
         if (widget.onLoadMore != null) {
-          widget.onLoadMore!(true); // true = 加载历史数据
+          widget.onLoadMore!(false);
         }
         _stopAnimation();
       }
-      // 到达右边界：停止动画并触发加载更多回调
+      // 到达左边界（历史数据）：停止动画并触发加载更多回调
       else if (mScrollX >= ChartPainter.maxScrollX) {
         mScrollX = ChartPainter.maxScrollX;
+        _triggerBoundaryCallback(true); // true = 加载历史数据
+        // 兼容旧的 onLoadMore 回调
         if (widget.onLoadMore != null) {
-          widget.onLoadMore!(false); // false = 加载最新数据
+          widget.onLoadMore!(true);
         }
         _stopAnimation();
       }
@@ -662,7 +798,128 @@ class _CandlestickWidgetState extends State<CandlestickWidget>
   /// 触发 Widget 重建
   void notifyChanged() => setState(() {});
 
+  /// 触发边界回调（带防抖和加载状态检查）
+  /// [isLeft] 为 true 表示左边界（历史数据），false 表示右边界（最新数据）
+  Future<void> _triggerBoundaryCallback(bool isLeft) async {
+    if (widget.onReachBoundary == null) return;
+
+    // 检查是否正在加载中（同方向）
+    if (_isLoadingAtLeft == isLeft) return;
+
+    // 防抖检查：距离上次触发是否超过设定的延迟时间
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (_lastBoundaryTriggerTime != null) {
+      final elapsed = now - _lastBoundaryTriggerTime!;
+      if (elapsed < widget.debounceDelay) return;
+    }
+
+    // 设置加载状态
+    setState(() {
+      _isLoadingAtLeft = isLeft;
+      _loadingError = null; // 清除之前的错误
+      _lastBoundaryTriggerTime = now;
+    });
+
+    // 触发回调并等待完成
+    try {
+      await Future.value(widget.onReachBoundary!(isLeft));
+      // 加载成功，重置状态
+      resetLoadingState();
+    } catch (error) {
+      // 加载失败，保存错误信息
+      setState(() {
+        _loadingError = error;
+      });
+      // 如果没有提供错误构建器，则隐藏指示器
+      if (widget.loadingErrorBuilder == null) {
+        resetLoadingState();
+      }
+    }
+  }
+
+  /// 重置加载状态
+  /// 在数据加载完成后调用此方法，允许再次触发加载
+  void resetLoadingState() {
+    if (_isLoadingAtLeft != null || _loadingError != null) {
+      setState(() {
+        _isLoadingAtLeft = null;
+        _loadingError = null;
+      });
+    }
+  }
+
+  /// 创建当前视口状态的快照
+  /// 在加载新数据前调用，用于之后恢复视口位置
+  ViewportSnapshot createViewportSnapshot() {
+    return ViewportSnapshot(
+      dataLength: widget.datas?.length ?? 0,
+      scrollX: mScrollX,
+      scaleX: mScaleX,
+    );
+  }
+
+  /// 恢复视口位置
+  /// 在数据更新后调用，保持用户看到的K线位置不变
+  ///
+  /// [snapshot] 之前通过 createViewportSnapshot() 创建的快照
+  /// [newDataCount] 新增数据的数量（正数表示左侧添加历史数据，负数表示右侧添加最新数据）
+  void restoreViewport(ViewportSnapshot snapshot, int newDataCount) {
+    if (widget.datas == null || widget.datas!.isEmpty) return;
+
+    // 计算新的 scrollX
+    // 如果是左侧加载历史数据（newDataCount > 0），需要增加 scrollX 来补偿新数据
+    // 这样原来可见的K线索引位置不变
+    final newScrollX = snapshot.scrollX + newDataCount;
+
+    setState(() {
+      // 恢复缩放级别
+      mScaleX = snapshot.scaleX;
+      // 调整滚动位置，确保在有效范围内
+      mScrollX = newScrollX.clamp(0.0, ChartPainter.maxScrollX).toDouble();
+    });
+  }
+
   late List<String> infos;
+
+  /// 构建加载指示器或错误组件
+  Widget _buildLoadingIndicator() {
+    if (_isLoadingAtLeft == null) {
+      return const SizedBox.shrink();
+    }
+
+    Widget content;
+
+    // 如果有错误且提供了错误构建器
+    if (_loadingError != null && widget.loadingErrorBuilder != null) {
+      // 保存当前加载方向，因为 resetLoadingState 会将其设为 null
+      final loadingDirection = _isLoadingAtLeft!;
+      content = widget.loadingErrorBuilder!(
+        loadingDirection,
+        _loadingError!,
+        () {
+          // 重试：先重置状态，再重新触发加载
+          resetLoadingState();
+          _triggerBoundaryCallback(loadingDirection);
+        },
+      );
+    }
+    // 否则显示加载指示器
+    else if (widget.loadingIndicatorBuilder != null) {
+      content = widget.loadingIndicatorBuilder!(_isLoadingAtLeft!);
+    }
+    // 如果都没有提供，显示空
+    else {
+      return const SizedBox.shrink();
+    }
+
+    // 根据加载方向定位指示器
+    return Positioned(
+      top: 0,
+      left: _isLoadingAtLeft! ? 0 : null,
+      right: _isLoadingAtLeft! ? null : 0,
+      child: content,
+    );
+  }
 
   /// 构建信息弹窗
   /// 使用 StreamBuilder 监听十字线选中的数据变化

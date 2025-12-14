@@ -217,4 +217,47 @@ class ChartStyle {
 
   /// 价格弹窗 - 边框圆角
   double popupBorderRadius = 0.0;
+
+  /// 影线宽度动态调整 - 是否启用
+  /// 当缩放到最小时，影线会逐渐变粗至与实体一样宽
+  bool enableDynamicShadowWidth = true;
+
+  /// 影线宽度动态调整 - 开始过渡的缩放阈值
+  /// 当 scaleX 低于此值时，开始增加影线宽度
+  /// 默认值 0.5 表示从 scaleX=0.5 开始过渡
+  double shadowWidthTransitionStart = 0.3;
+
+  /// 影线宽度动态调整 - 完全过渡的缩放阈值
+  /// 当 scaleX 低于此值时，影线宽度完全等于实体宽度
+  /// 默认值 0.2 表示在最小缩放时影线与实体同宽
+  double shadowWidthTransitionEnd = 0.2;
+
+  // ===== 技术指标线宽动态调整配置 =====
+
+  /// 主图指标线宽动态调整 - 是否启用
+  /// 启用后，主图技术指标线（MA、BOLL、SAR）会根据缩放级别动态调整粗细
+  /// - 缩放时保持视觉一致性（补偿 scaleX）
+  /// - 最小宽度不低于 K 线实体宽度（保证可见性）
+  /// - 最大宽度受固定上限和 K 线宽度双重约束
+  bool enableDynamicMainIndicatorWidth = false;
+
+  /// 主图指标线 - 基础宽度（像素）
+  /// 在 scaleX = 1.0 时的线条宽度
+  double mainIndicatorBaseWidth = 1.5;
+
+  /// 主图指标线 - 固定最大宽度上限（像素）
+  /// 线条宽度不会超过此值，即使 K 线很宽
+  double mainIndicatorMaxWidth = 3.0;
+
+  /// 副图指标线宽动态调整 - 是否启用
+  /// 启用后，副图技术指标线（MACD、KDJ、RSI 等）会根据缩放级别动态调整粗细
+  bool enableDynamicSecondaryIndicatorWidth = false;
+
+  /// 副图指标线 - 基础宽度（像素）
+  /// 在 scaleX = 1.0 时的线条宽度
+  double secondaryIndicatorBaseWidth = 1.2;
+
+  /// 副图指标线 - 固定最大宽度上限（像素）
+  /// 线条宽度不会超过此值
+  double secondaryIndicatorMaxWidth = 3.0;
 }

@@ -69,6 +69,7 @@ class ChartPainter extends BaseChartPainter {
     required isLongPass,
     required selectX,
     required xFrontPadding,
+    required xBackPadding,
     required this.baseDimension,
     isOnTap,
     isTapShowInfoDialog,
@@ -97,6 +98,7 @@ class ChartPainter extends BaseChartPainter {
             volHidden: volHidden,
             secondaryStateLi: secondaryStateLi,
             xFrontPadding: xFrontPadding,
+            xBackPadding: xBackPadding,
             isLine: isLine) {
     selectPointPaint = Paint()
       ..isAntiAlias = true
@@ -156,6 +158,7 @@ class ChartPainter extends BaseChartPainter {
         fixedLength,
         chartStyle,
         chartColors,
+        scaleX,
         priceFormatter,
       ));
     }

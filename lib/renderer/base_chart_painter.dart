@@ -57,6 +57,7 @@ abstract class BaseChartPainter extends CustomPainter {
   // format time
   List<String> mFormats = [yyyy, '-', mm, '-', dd, ' ', HH, ':', nn];
   double xFrontPadding;
+  double xBackPadding;
 
   /// base dimension
   final BaseDimension baseDimension;
@@ -71,6 +72,7 @@ abstract class BaseChartPainter extends CustomPainter {
     required this.isLongPress,
     required this.selectX,
     required this.xFrontPadding,
+    required this.xBackPadding,
     required this.baseDimension,
     this.isOnTap = false,
     this.mainStateLi = const <MainState>{},
@@ -217,7 +219,9 @@ abstract class BaseChartPainter extends CustomPainter {
   calculateValue() {
     if (datas == null) return;
     if (datas!.isEmpty) return;
-    maxScrollX = getMinTranslateX().abs();
+    // 更新最大滚动距离，现在包括左侧和右侧的留白区域
+    // maxScrollX = 从最左侧（包含左侧留白）到最右侧（包含右侧留白）的总距离
+    maxScrollX = getMinTranslateX().abs() + getMaxTranslateX();
     setTranslateXFromScrollX(scrollX);
     mStartIndex = indexOfTranslateX(xToTranslateX(0));
     mStopIndex = indexOfTranslateX(xToTranslateX(mWidth));
@@ -437,12 +441,31 @@ abstract class BaseChartPainter extends CustomPainter {
   /// 公式分析：
   /// - mDataLen：所有数据的总宽度
   /// - mWidth / scaleX：屏幕宽度对应的逻辑宽度
-  /// - xFrontPadding：右侧留白
+  /// - xFrontPadding / scaleX：右侧留白（动态调整，缩放时保持视觉一致）
+  /// - xBackPadding / scaleX：左侧留白（动态调整，缩放时保持视觉一致）
+  ///
+  /// 动态边距说明：
+  /// - 当 scaleX = 0.5（缩小）时，边距 = 100 / 0.5 = 200（逻辑单位）
+  /// - 当 scaleX = 2.0（放大）时，边距 = 100 / 2.0 = 50（逻辑单位）
+  /// - 屏幕上的实际像素 = 逻辑单位 × scaleX，始终为 100px
   ///
   /// 当数据量很少时，返回 0（不需要平移）
   double getMinTranslateX() {
-    var x = -mDataLen + mWidth / scaleX - mPointWidth / 2 - xFrontPadding;
+    var x = -mDataLen + mWidth / scaleX - mPointWidth / 2 - xFrontPadding / scaleX;
     return x >= 0 ? 0.0 : x;
+  }
+
+  /// 计算最大平移值（即显示最左侧数据时的平移值）
+  /// 返回值：最大平移值（正数或0）
+  ///
+  /// 公式分析：
+  /// - xBackPadding / scaleX：左侧留白距离（动态调整）
+  /// - mPointWidth / 2：第一根K线中心点偏移
+  ///
+  /// 这个值表示当第一根K线向右偏移 xBackPadding 距离时的平移量
+  /// 动态调整确保无论缩放级别，视觉上的留白保持一致
+  double getMaxTranslateX() {
+    return xBackPadding / scaleX - mPointWidth / 2;
   }
 
   /// 计算用户选中的数据索引（用于十字线）

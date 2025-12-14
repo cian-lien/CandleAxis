@@ -268,30 +268,36 @@ class MainRenderer extends BaseChartRenderer<CandleEntity> {
 
   void drawMaLine(CandleEntity lastPoint, CandleEntity curPoint, Canvas canvas,
       double lastX, double curX) {
+    final lineWidth = _calculateMainIndicatorWidth();
     for (int i = 0; i < (curPoint.maValueList?.length ?? 0); i++) {
       if (i == 3) {
         break;
       }
       if (lastPoint.maValueList?[i] != 0) {
         drawLine(lastPoint.maValueList?[i], curPoint.maValueList?[i], canvas,
-            lastX, curX, this.chartColors.getMAColor(i));
+            lastX, curX, this.chartColors.getMAColor(i),
+            lineWidth: lineWidth);
       }
     }
   }
 
   void drawBollLine(CandleEntity lastPoint, CandleEntity curPoint,
       Canvas canvas, double lastX, double curX) {
+    final lineWidth = _calculateMainIndicatorWidth();
     if (lastPoint.up != 0) {
       drawLine(lastPoint.up, curPoint.up, canvas, lastX, curX,
-          this.chartColors.ma10Color);
+          this.chartColors.ma10Color,
+          lineWidth: lineWidth);
     }
     if (lastPoint.mb != 0) {
       drawLine(lastPoint.mb, curPoint.mb, canvas, lastX, curX,
-          this.chartColors.ma5Color);
+          this.chartColors.ma5Color,
+          lineWidth: lineWidth);
     }
     if (lastPoint.dn != 0) {
       drawLine(lastPoint.dn, curPoint.dn, canvas, lastX, curX,
-          this.chartColors.ma30Color);
+          this.chartColors.ma30Color,
+          lineWidth: lineWidth);
     }
   }
 
@@ -315,7 +321,74 @@ class MainRenderer extends BaseChartRenderer<CandleEntity> {
       color = this.chartColors.dnColor; // SAR 在上方：看跌（红色/绿色）
     }
 
-    drawCircle(canvas, curX, sar, color);
+    // 使用动态宽度绘制 SAR 圆点
+    final lineWidth = _calculateMainIndicatorWidth();
+    final radius = lineWidth.clamp(1.5, 3.0); // 圆点半径基于线宽
+    drawCircle(canvas, curX, sar, color,
+        radius: radius, strokeWidth: lineWidth * 0.5);
+  }
+
+  /// 计算动态影线宽度
+  /// 根据当前缩放级别 (scaleX) 平滑调整影线宽度
+  /// 当缩放到最小时，影线宽度逐渐增加至与实体宽度相同
+  ///
+  /// 算法说明：
+  /// 1. 如果未启用动态调整，返回默认影线宽度
+  /// 2. 如果 scaleX > 过渡起点，返回默认影线宽度（无需调整）
+  /// 3. 如果 scaleX < 过渡终点，返回实体宽度（完全过渡）
+  /// 4. 否则，在过渡区间内进行线性插值
+  ///
+  /// 返回值：当前应该使用的影线宽度
+  double _calculateDynamicShadowWidth() {
+    // 功能未启用时，使用默认宽度
+    if (!this.chartStyle.enableDynamicShadowWidth) {
+      return mCandleLineWidth;
+    }
+
+    final start = this.chartStyle.shadowWidthTransitionStart;
+    final end = this.chartStyle.shadowWidthTransitionEnd;
+
+    // 缩放级别高于过渡起点，使用默认影线宽度
+    if (scaleX >= start) {
+      return mCandleLineWidth;
+    }
+
+    // 缩放级别低于过渡终点，影线宽度等于实体宽度
+    if (scaleX <= end) {
+      return mCandleWidth;
+    }
+
+    // 在过渡区间内，线性插值计算影线宽度
+    // progress: 0.0 (在起点) -> 1.0 (在终点)
+    final progress = (start - scaleX) / (start - end);
+
+    // 从默认影线宽度平滑过渡到实体宽度
+    return mCandleLineWidth + (mCandleWidth - mCandleLineWidth) * progress;
+  }
+
+  /// 计算主图技术指标的动态线宽
+  /// 根据缩放级别动态调整线条粗细，保持视觉一致性
+  ///
+  /// 算法：
+  /// 1. 基础宽度除以 scaleX，补偿缩放效果
+  /// 2. 最大宽度不超过 min(固定上限, K 线实体宽度)
+  ///
+  /// 返回值：应该使用的线条宽度
+  double _calculateMainIndicatorWidth() {
+    if (!this.chartStyle.enableDynamicMainIndicatorWidth) {
+      return this.chartStyle.mainIndicatorBaseWidth;
+    }
+
+    // 基础宽度 / scaleX，补偿缩放
+    final baseWidth = this.chartStyle.mainIndicatorBaseWidth / scaleX;
+
+    // 最大宽度 = min(固定上限, K 线实体宽度)
+    final maxWidth = this.chartStyle.mainIndicatorMaxWidth < mCandleWidth
+        ? this.chartStyle.mainIndicatorMaxWidth
+        : mCandleWidth;
+
+    // 限制最大宽度，最小宽度使用较小的值保证细线效果
+    return baseWidth > maxWidth ? maxWidth : baseWidth;
   }
 
   /// 绘制单根蜡烛图
@@ -331,7 +404,10 @@ class MainRenderer extends BaseChartRenderer<CandleEntity> {
     var close = getY(curPoint.close); // 收盘价对应的 Y 坐标
 
     double r = mCandleWidth / 2; // 实体半宽
-    double lineR = mCandleLineWidth / 2; // 影线半宽
+
+    // ===== 动态影线宽度计算 =====
+    // 根据缩放级别平滑调整影线宽度，缩放越小影线越粗
+    double lineR = _calculateDynamicShadowWidth() / 2; // 影线半宽
 
     // ===== 阳线（涨）：开盘价 >= 收盘价 =====
     if (open >= close) {
