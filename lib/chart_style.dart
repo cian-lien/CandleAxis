@@ -269,4 +269,8 @@ class ChartStyle {
 
   /// 虚线间隔长度
   double crossLineDashSpace = 3.0;
+
+  /// 日期行高度（显示在K线图正下方）
+  /// 设置为 0 则日期显示在图表最底部（传统模式）
+  double dateRowHeight = 20.0;
 }

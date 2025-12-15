@@ -37,6 +37,7 @@ class ChartPainter extends BaseChartPainter {
   bool isrecordingCord = false; //For TrendLine
   final double selectY; //For TrendLine
   static get maxScrollX => BaseChartPainter.maxScrollX;
+  final bool isCrossLocked; // 十字线是否锁定显示
   late BaseChartRenderer mMainRenderer;
   BaseChartRenderer? mVolRenderer;
   Set<BaseChartRenderer> mSecondaryRendererList = {};
@@ -87,6 +88,7 @@ class ChartPainter extends BaseChartPainter {
     this.priceFormatter,
     this.nowPriceAlignment,
     this.crossPriceAlignment = CrossPriceAlignment.auto,
+    this.isCrossLocked = false,
   }) : super(chartStyle,
             datas: datas,
             scaleX: scaleX,
@@ -180,6 +182,11 @@ class ChartPainter extends BaseChartPainter {
         Rect.fromLTRB(0, 0, mMainRect.width, mMainRect.height + mTopPadding);
     canvas.drawRect(mainRect, mBgPaint);
 
+    // 日期行背景（K线图正下方）
+    Rect dateRect = Rect.fromLTRB(
+        0, mMainRect.bottom, size.width, mMainRect.bottom + mDateRowHeight);
+    canvas.drawRect(dateRect, mBgPaint);
+
     if (mVolRect != null) {
       Rect volRect = Rect.fromLTRB(
           0, mVolRect!.top - mChildPadding, mVolRect!.width, mVolRect!.bottom);
@@ -192,9 +199,6 @@ class ChartPainter extends BaseChartPainter {
           mSecondaryRect.width, mSecondaryRect.bottom);
       canvas.drawRect(secondaryRect, mBgPaint);
     }
-    Rect dateRect =
-        Rect.fromLTRB(0, size.height - mBottomPadding, size.width, size.height);
-    canvas.drawRect(dateRect, mBgPaint);
   }
 
   @override
@@ -227,7 +231,7 @@ class ChartPainter extends BaseChartPainter {
       });
     }
 
-    if ((isLongPress == true || (isTapShowInfoDialog && isOnTap)) &&
+    if ((isLongPress == true || isCrossLocked || (isTapShowInfoDialog && isOnTap)) &&
         isTrendLine == false) {
       drawCrossLine(canvas, size);
     }
@@ -264,7 +268,8 @@ class ChartPainter extends BaseChartPainter {
 
         if (datas?[index] == null) continue;
         TextPainter tp = getTextPainter(getDate(datas![index].time), null);
-        y = size.height - (mBottomPadding - tp.height) / 2 - tp.height;
+        // 日期标签显示在K线图正下方（mMainRect.bottom）
+        y = mMainRect.bottom + (mDateRowHeight - tp.height) / 2;
         x = columnSpace * i - tp.width / 2;
         // Prevent date text out of canvas
         if (x < 0) x = 0;
@@ -343,7 +348,8 @@ class ChartPainter extends BaseChartPainter {
     textWidth = dateTp.width;
     r = textHeight / 2;
     x = translateXtoX(getX(index));
-    y = size.height - mBottomPadding;
+    // 十字准心日期标签显示在K线图正下方
+    y = mMainRect.bottom;
 
     if (x < textWidth + 2 * w1) {
       x = 1 + textWidth / 2 + w1;
@@ -368,7 +374,7 @@ class ChartPainter extends BaseChartPainter {
   @override
   void drawText(Canvas canvas, KLineEntity data, double x) {
     //Long press to display the data in the press
-    if (isLongPress || (isTapShowInfoDialog && isOnTap)) {
+    if (isLongPress || isCrossLocked || (isTapShowInfoDialog && isOnTap)) {
       var index = calculateSelectedX(selectX);
       data = getItem(index);
     }
@@ -546,42 +552,93 @@ class ChartPainter extends BaseChartPainter {
   void drawCrossLine(Canvas canvas, Size size) {
     var index = calculateSelectedX(selectX);
     KLineEntity point = getItem(index);
-    Paint paintY = Paint()
-      ..color = this.chartColors.vCrossColor
-      ..strokeWidth = this.chartStyle.vCrossWidth
-      ..isAntiAlias = true;
     double x = getX(index);
     double y = getMainY(point.close);
 
+    // 竖线 Paint：补偿 scaleX 对线宽的影响
+    Paint paintY = Paint()
+      ..color = this.chartColors.vCrossColor
+      ..strokeWidth = this.chartStyle.vCrossWidth / scaleX
+      ..isAntiAlias = true;
+
+    // 横线 Paint：保持原始线宽
     Paint paintX = Paint()
       ..color = this.chartColors.hCrossColor
       ..strokeWidth = this.chartStyle.hCrossWidth
       ..isAntiAlias = true;
-    // K-line chart horizontal line
+
     if (chartStyle.crossLineDash) {
-      _drawDashedLine(canvas, Offset(x, mTopPadding),
-          Offset(x, size.height - mBottomPadding), paintY);
-      _drawDashedLine(canvas, Offset(-mTranslateX, y),
-          Offset(-mTranslateX + mWidth / scaleX, y), paintX);
+      // 竖线虚线：补偿 dashLength 和 dashSpace
+      _drawDashedLineCompensated(
+        canvas,
+        Offset(x, mTopPadding),
+        Offset(x, size.height - mBottomPadding),
+        paintY,
+        scaleX,
+      );
+      // 横线虚线：补偿 scaleX 拉伸，保持与竖线样式一致
+      _drawDashedLineHorizontalCompensated(canvas, Offset(-mTranslateX, y),
+          Offset(-mTranslateX + mWidth / scaleX, y), paintX, scaleX);
     } else {
-      // 原有实线绘制
+      // 实线绘制
       canvas.drawLine(Offset(x, mTopPadding),
           Offset(x, size.height - mBottomPadding), paintY);
       canvas.drawLine(Offset(-mTranslateX, y),
           Offset(-mTranslateX + mWidth / scaleX, y), paintX);
     }
 
-    // 绘制中心圆点
+    // 绘制中心圆点：使用 drawOval 补偿 scaleX，保持视觉上的圆形
     Paint paintDot = Paint()
       ..color = this.chartColors.hCrossColor
       ..style = PaintingStyle.fill;
-    canvas.drawCircle(Offset(x, y), 3.0, paintDot);
+    double radius = 3.0;
+    // 水平方向除以 scaleX 补偿缩放，垂直方向保持不变
+    canvas.drawOval(
+      Rect.fromCenter(
+        center: Offset(x, y),
+        width: radius * 2 / scaleX,
+        height: radius * 2,
+      ),
+      paintDot,
+    );
   }
 
-  /// 绘制虚线
-  void _drawDashedLine(Canvas canvas, Offset start, Offset end, Paint paint) {
+  /// 绘制虚线（带 scaleX 补偿，用于竖线）
+  /// 由于 canvas 已应用 scale(scaleX, 1.0)，竖线的虚线段间距会被压缩
+  /// 此方法通过调整 dashLength 和 dashSpace 来补偿
+  void _drawDashedLineCompensated(
+      Canvas canvas, Offset start, Offset end, Paint paint, double scaleX) {
+    // 补偿 scaleX 对虚线段的影响
     final dashLength = chartStyle.crossLineDashLength;
     final dashSpace = chartStyle.crossLineDashSpace;
+
+    final dx = end.dx - start.dx;
+    final dy = end.dy - start.dy;
+    final distance = math.sqrt(dx * dx + dy * dy);
+    final unitX = dx / distance;
+    final unitY = dy / distance;
+
+    double currentDistance = 0;
+    while (currentDistance < distance) {
+      final segmentEnd = (currentDistance + dashLength).clamp(0.0, distance);
+      canvas.drawLine(
+        Offset(start.dx + unitX * currentDistance,
+            start.dy + unitY * currentDistance),
+        Offset(start.dx + unitX * segmentEnd, start.dy + unitY * segmentEnd),
+        paint,
+      );
+      currentDistance += dashLength + dashSpace;
+    }
+  }
+
+  /// 绘制虚线（带 scaleX 补偿，用于横线）
+  /// 由于 canvas 已应用 scale(scaleX, 1.0)，横线的虚线段会被拉伸
+  /// 此方法通过调整 dashLength 和 dashSpace 来补偿，使横线与竖线样式一致
+  void _drawDashedLineHorizontalCompensated(
+      Canvas canvas, Offset start, Offset end, Paint paint, double scaleX) {
+    // 补偿 scaleX 对虚线段的影响（横线沿 X 轴绘制，会被拉伸）
+    final dashLength = chartStyle.crossLineDashLength / scaleX;
+    final dashSpace = chartStyle.crossLineDashSpace / scaleX;
 
     final dx = end.dx - start.dx;
     final dy = end.dy - start.dy;

@@ -41,6 +41,8 @@ abstract class BaseChartPainter extends CustomPainter {
   late double mDisplayHeight, mWidth;
   // padding
   double mTopPadding = 20.0, mBottomPadding = 20.0, mChildPadding = 12.0;
+  // 日期行高度（K线图下方）
+  double mDateRowHeight = 20.0;
   // grid: rows - columns
   int mGridRows = 4, mGridColumns = 4;
   int mStartIndex = 0, mStopIndex = 0;
@@ -87,6 +89,7 @@ abstract class BaseChartPainter extends CustomPainter {
         baseDimension.totalLabelHeight; // space to display text of main chart
     mBottomPadding = this.chartStyle.bottomPadding;
     mChildPadding = this.chartStyle.childPadding;
+    mDateRowHeight = this.chartStyle.dateRowHeight;
     mGridRows = this.chartStyle.gridRows;
     mGridColumns = this.chartStyle.gridColumns;
     mDataLen = mItemCount * mPointWidth;
@@ -192,12 +195,18 @@ abstract class BaseChartPainter extends CustomPainter {
     double mainHeight = mDisplayHeight;
     mainHeight -= volHeight;
     mainHeight -= baseDimension.totalSecondaryHeight;
+    // 为日期行预留空间
+    mainHeight -= mDateRowHeight;
 
     mMainRect = Rect.fromLTRB(0, mTopPadding, mWidth, mTopPadding + mainHeight);
 
+    // 日期行位置：mMainRect.bottom 到 mMainRect.bottom + mDateRowHeight
+    // 成交量从日期行下方开始
+    double dateRowBottom = mMainRect.bottom + mDateRowHeight;
+
     if (volHidden != true) {
-      mVolRect = Rect.fromLTRB(0, mMainRect.bottom + mChildPadding, mWidth,
-          mMainRect.bottom + volHeight);
+      mVolRect = Rect.fromLTRB(0, dateRowBottom + mChildPadding, mWidth,
+          dateRowBottom + volHeight);
     }
 
     mSecondaryRectList.clear();
@@ -205,9 +214,9 @@ abstract class BaseChartPainter extends CustomPainter {
       mSecondaryRectList.add(RenderRect(
         Rect.fromLTRB(
             0,
-            mMainRect.bottom + volHeight + i * secondaryHeight + mChildPadding,
+            dateRowBottom + volHeight + i * secondaryHeight + mChildPadding,
             mWidth,
-            mMainRect.bottom +
+            dateRowBottom +
                 volHeight +
                 i * secondaryHeight +
                 secondaryHeight),

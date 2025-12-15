@@ -346,6 +346,12 @@ class _CandlestickWidgetState extends State<CandlestickWidget>
   /// isOnTap: 是否点击
   bool isScale = false, isDrag = false, isLongPress = false, isOnTap = false;
 
+  /// 十字线是否锁定显示
+  /// - 点击图表时切换状态
+  /// - 长按拖动后保持显示
+  /// - 滑动或缩放时自动隐藏
+  bool _isCrossLocked = false;
+
   /// 边界处累积的滑动距离，用于触发 onReachBoundary
   /// 当用户在边界继续滑动超过阈值（50像素）时，触发加载更多回调
   double _boundaryOverscroll = 0.0;
@@ -424,6 +430,7 @@ class _CandlestickWidgetState extends State<CandlestickWidget>
       priceFormatter: widget.priceFormatter,
       nowPriceAlignment: widget.nowPriceAlignment,
       crossPriceAlignment: widget.crossPriceAlignment,
+      isCrossLocked: _isCrossLocked, // 十字线锁定状态
     );
 
     // 使用 LayoutBuilder 获取图表的实际尺寸
@@ -472,6 +479,13 @@ class _CandlestickWidgetState extends State<CandlestickWidget>
                     ..onUpdate = (details) {
                       // 长按状态下不处理（避免与十字线冲突）
                       if (isLongPress) return;
+
+                      // 滑动或缩放时隐藏十字线
+                      if (_isCrossLocked) {
+                        _isCrossLocked = false;
+                        isOnTap = false;
+                        mInfoWindowStream.sink.add(null);
+                      }
 
                       // ===== 关键：检测手指数量变化，重置基线 =====
                       // 从 1->2 或 2->1 时，焦点会从单指位置跳到两指中点
@@ -587,22 +601,27 @@ class _CandlestickWidgetState extends State<CandlestickWidget>
                 },
               ),
 
-            // ========== 3. 点击手势 - 显示信息弹窗或绘制趋势线 ==========
+            // ========== 3. 点击手势 - 切换十字线显示或绘制趋势线 ==========
             TapGestureRecognizer:
                 GestureRecognizerFactoryWithHandlers<TapGestureRecognizer>(
               () => TapGestureRecognizer(),
               (TapGestureRecognizer instance) {
                 instance.onTapUp = (details) {
-                  // 普通点击模式：显示点击位置的详细信息
+                  // 普通点击模式：切换十字线显示状态
                   if (!widget.isTrendLine &&
                       painter.isInMainRect(details.localPosition)) {
-                    isOnTap = true;
-                    // 只有位置变化时才更新（避免重复触发）
-                    if (mSelectX != details.localPosition.dx &&
-                        widget.isTapShowInfoDialog) {
+                    if (_isCrossLocked) {
+                      // 十字线已显示，点击则隐藏
+                      _isCrossLocked = false;
+                      isOnTap = false;
+                      mInfoWindowStream.sink.add(null); // 清空信息弹窗
+                    } else {
+                      // 十字线未显示，点击则显示并锁定
+                      _isCrossLocked = true;
+                      isOnTap = true;
                       mSelectX = details.localPosition.dx;
-                      notifyChanged();
                     }
+                    notifyChanged();
                   }
 
                   // 趋势线模式：记录点击的坐标点
@@ -689,7 +708,13 @@ class _CandlestickWidgetState extends State<CandlestickWidget>
                   ..onLongPressEnd = (details) {
                     isLongPress = false;
                     enableCordRecord = true; // 启用趋势线坐标记录
-                    mInfoWindowStream.sink.add(null); // 清空信息弹窗
+                    // 长按结束后锁定十字线，保持显示
+                    if (!widget.isTrendLine) {
+                      _isCrossLocked = true;
+                      isOnTap = true; // 保持 isOnTap 为 true 以显示十字线
+                    } else {
+                      mInfoWindowStream.sink.add(null); // 趋势线模式清空信息弹窗
+                    }
                     notifyChanged();
                   };
               },
@@ -928,10 +953,10 @@ class _CandlestickWidgetState extends State<CandlestickWidget>
       stream: mInfoWindowStream.stream,
       builder: (context, snapshot) {
         // 隐藏弹窗的条件：
-        // 1. 没有长按或点击
+        // 1. 没有长按、点击或锁定状态
         // 2. 分时图模式
         // 3. 没有数据
-        if ((!isLongPress && !isOnTap) ||
+        if ((!isLongPress && !isOnTap && !_isCrossLocked) ||
             widget.isLine == true ||
             !snapshot.hasData ||
             snapshot.data?.kLineEntity == null) return SizedBox();
