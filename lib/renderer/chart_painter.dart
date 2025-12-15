@@ -1,9 +1,11 @@
 import 'dart:async' show StreamSink;
+import 'dart:math' as math;
 
 import 'package:candlestick/utils/number_util.dart';
 import 'package:flutter/material.dart';
 
-import '../candlestick_widget.dart' show PriceFormatter, NowPriceAlignment, CrossPriceAlignment;
+import '../candlestick_widget.dart'
+    show PriceFormatter, NowPriceAlignment, CrossPriceAlignment;
 import '../entity/info_window_entity.dart';
 import '../entity/k_line_entity.dart';
 import '../utils/date_format_util.dart';
@@ -144,8 +146,15 @@ class ChartPainter extends BaseChartPainter {
       priceFormatter,
     );
     if (mVolRect != null) {
-      mVolRenderer = VolRenderer(mVolRect!, mVolMaxValue, mVolMinValue,
-          mChildPadding, fixedLength, this.chartStyle, this.chartColors, priceFormatter);
+      mVolRenderer = VolRenderer(
+          mVolRect!,
+          mVolMaxValue,
+          mVolMinValue,
+          mChildPadding,
+          fixedLength,
+          this.chartStyle,
+          this.chartColors,
+          priceFormatter);
     }
     mSecondaryRendererList.clear();
     for (int i = 0; i < mSecondaryRectList.length; ++i) {
@@ -282,7 +291,8 @@ class ChartPainter extends BaseChartPainter {
     var index = calculateSelectedX(selectX);
     KLineEntity point = getItem(index);
 
-    TextPainter tp = getTextPainter(formatPrice(point.close), chartColors.crossTextColor);
+    TextPainter tp =
+        getTextPainter(formatPrice(point.close), chartColors.crossTextColor);
     double textHeight = tp.height;
     double textWidth = tp.width;
 
@@ -379,13 +389,11 @@ class ChartPainter extends BaseChartPainter {
     if (x < mWidth / 2) {
       //draw right
       TextPainter tp = getTextPainter(
-          "── " + formatPrice(mMainLowMinValue),
-          chartColors.minColor);
+          "── " + formatPrice(mMainLowMinValue), chartColors.minColor);
       tp.paint(canvas, Offset(x, y - tp.height / 2));
     } else {
       TextPainter tp = getTextPainter(
-          formatPrice(mMainLowMinValue) + " ──",
-          chartColors.minColor);
+          formatPrice(mMainLowMinValue) + " ──", chartColors.minColor);
       tp.paint(canvas, Offset(x - tp.width, y - tp.height / 2));
     }
     x = translateXtoX(getX(mMainMaxIndex));
@@ -393,13 +401,11 @@ class ChartPainter extends BaseChartPainter {
     if (x < mWidth / 2) {
       //draw right
       TextPainter tp = getTextPainter(
-          "── " + formatPrice(mMainHighMaxValue),
-          chartColors.maxColor);
+          "── " + formatPrice(mMainHighMaxValue), chartColors.maxColor);
       tp.paint(canvas, Offset(x, y - tp.height / 2));
     } else {
       TextPainter tp = getTextPainter(
-          formatPrice(mMainHighMaxValue) + " ──",
-          chartColors.maxColor);
+          formatPrice(mMainHighMaxValue) + " ──", chartColors.maxColor);
       tp.paint(canvas, Offset(x - tp.width, y - tp.height / 2));
     }
   }
@@ -546,27 +552,53 @@ class ChartPainter extends BaseChartPainter {
       ..isAntiAlias = true;
     double x = getX(index);
     double y = getMainY(point.close);
-    // K-line chart vertical line
-    canvas.drawLine(Offset(x, mTopPadding),
-        Offset(x, size.height - mBottomPadding), paintY);
 
     Paint paintX = Paint()
       ..color = this.chartColors.hCrossColor
       ..strokeWidth = this.chartStyle.hCrossWidth
       ..isAntiAlias = true;
     // K-line chart horizontal line
-    canvas.drawLine(Offset(-mTranslateX, y),
-        Offset(-mTranslateX + mWidth / scaleX, y), paintX);
-    if (scaleX >= 1) {
-      canvas.drawOval(
-        Rect.fromCenter(center: Offset(x, y), height: 2.0 * scaleX, width: 2.0),
-        paintX,
-      );
+    if (chartStyle.crossLineDash) {
+      _drawDashedLine(canvas, Offset(x, mTopPadding),
+          Offset(x, size.height - mBottomPadding), paintY);
+      _drawDashedLine(canvas, Offset(-mTranslateX, y),
+          Offset(-mTranslateX + mWidth / scaleX, y), paintX);
     } else {
-      canvas.drawOval(
-        Rect.fromCenter(center: Offset(x, y), height: 2.0, width: 2.0 / scaleX),
-        paintX,
+      // 原有实线绘制
+      canvas.drawLine(Offset(x, mTopPadding),
+          Offset(x, size.height - mBottomPadding), paintY);
+      canvas.drawLine(Offset(-mTranslateX, y),
+          Offset(-mTranslateX + mWidth / scaleX, y), paintX);
+    }
+
+    // 绘制中心圆点
+    Paint paintDot = Paint()
+      ..color = this.chartColors.hCrossColor
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(Offset(x, y), 3.0, paintDot);
+  }
+
+  /// 绘制虚线
+  void _drawDashedLine(Canvas canvas, Offset start, Offset end, Paint paint) {
+    final dashLength = chartStyle.crossLineDashLength;
+    final dashSpace = chartStyle.crossLineDashSpace;
+
+    final dx = end.dx - start.dx;
+    final dy = end.dy - start.dy;
+    final distance = math.sqrt(dx * dx + dy * dy);
+    final unitX = dx / distance;
+    final unitY = dy / distance;
+
+    double currentDistance = 0;
+    while (currentDistance < distance) {
+      final segmentEnd = (currentDistance + dashLength).clamp(0.0, distance);
+      canvas.drawLine(
+        Offset(start.dx + unitX * currentDistance,
+            start.dy + unitY * currentDistance),
+        Offset(start.dx + unitX * segmentEnd, start.dy + unitY * segmentEnd),
+        paint,
       );
+      currentDistance += dashLength + dashSpace;
     }
   }
 

@@ -156,7 +156,7 @@ class ChartColors {
     this.infoWindowUpColor = const Color(0xFF14AD8F),
     this.infoWindowDnColor = const Color(0xFFD5405D),
     this.hCrossColor = const Color(0xFF222223),
-    this.vCrossColor = const Color(0x28424652),
+    this.vCrossColor = const Color(0xFF222223),
     this.crossTextColor = const Color(0xFF222223),
 
     ///The color of the maximum and minimum values in the current display
@@ -186,7 +186,7 @@ class ChartStyle {
   double macdWidth = 1.2;
 
   ///vertical-horizontal cross line width
-  double vCrossWidth = 8.5;
+  double vCrossWidth = 0.5;
   double hCrossWidth = 0.5;
 
   ///(line length - space line - thickness) of the current price
@@ -260,4 +260,13 @@ class ChartStyle {
   /// 副图指标线 - 固定最大宽度上限（像素）
   /// 线条宽度不会超过此值
   double secondaryIndicatorMaxWidth = 3.0;
+
+  /// 十字线是否使用虚线
+  bool crossLineDash = true;
+
+  /// 虚线段长度
+  double crossLineDashLength = 4.0;
+
+  /// 虚线间隔长度
+  double crossLineDashSpace = 3.0;
 }
