@@ -189,37 +189,38 @@ abstract class BaseChartPainter extends CustomPainter {
 
   /// init the rectangle box to draw chart
   void initRect(Size size) {
-    double volHeight = baseDimension.mVolumeHeight;
-    double secondaryHeight = baseDimension.mSecondaryHeight;
+    // 获取基础高度参数
+    double volHeight = baseDimension.mVolumeHeight; // 成交量区域的高度
+    double secondaryHeight = baseDimension.mSecondaryHeight; // 单个副图的高度
 
-    double mainHeight = mDisplayHeight;
-    mainHeight -= volHeight;
-    mainHeight -= baseDimension.totalSecondaryHeight;
+    double mainHeight = mDisplayHeight; // 主图区域的高度
+    mainHeight -= volHeight; // 减去成交量区域的高度
+    mainHeight -= baseDimension.totalSecondaryHeight; // 减去副图区域的高度
     // 为日期行预留空间
     mainHeight -= mDateRowHeight;
 
-    mMainRect = Rect.fromLTRB(0, mTopPadding, mWidth, mTopPadding + mainHeight);
+    mMainRect = Rect.fromLTRB(
+        0, mTopPadding, mWidth, mTopPadding + mainHeight); // 主图区域的位置和大小
 
     // 日期行位置：mMainRect.bottom 到 mMainRect.bottom + mDateRowHeight
     // 成交量从日期行下方开始
     double dateRowBottom = mMainRect.bottom + mDateRowHeight;
 
     if (volHidden != true) {
-      mVolRect = Rect.fromLTRB(0, dateRowBottom + mChildPadding, mWidth,
-          dateRowBottom + volHeight);
+      // 创建成交量矩形
+      mVolRect = Rect.fromLTRB(
+          0, dateRowBottom + mChildPadding, mWidth, dateRowBottom + volHeight);
     }
 
     mSecondaryRectList.clear();
+    // 创建副图矩形列表
     for (int i = 0; i < secondaryStateLi.length; ++i) {
       mSecondaryRectList.add(RenderRect(
         Rect.fromLTRB(
             0,
             dateRowBottom + volHeight + i * secondaryHeight + mChildPadding,
             mWidth,
-            dateRowBottom +
-                volHeight +
-                i * secondaryHeight +
-                secondaryHeight),
+            dateRowBottom + volHeight + i * secondaryHeight + secondaryHeight),
       ));
     }
   }
@@ -460,7 +461,8 @@ abstract class BaseChartPainter extends CustomPainter {
   ///
   /// 当数据量很少时，返回 0（不需要平移）
   double getMinTranslateX() {
-    var x = -mDataLen + mWidth / scaleX - mPointWidth / 2 - xFrontPadding / scaleX;
+    var x =
+        -mDataLen + mWidth / scaleX - mPointWidth / 2 - xFrontPadding / scaleX;
     return x >= 0 ? 0.0 : x;
   }
 

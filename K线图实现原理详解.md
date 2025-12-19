@@ -437,98 +437,47 @@ drawPolyline(double lastPrice, double curPrice, Canvas canvas,
 
 ### 第四步：手势交互系统
 
-#### 4.1 多手势识别器组合
+#### 4.1 统一手势识别器架构
 
-**文件位置**: [lib/candlestick_widget.dart:222](lib/candlestick_widget.dart#L222)
+**文件位置**: [lib/candlestick_widget.dart:448](lib/candlestick_widget.dart#L448)
 
 ```dart
-return RawGestureDetector(
-  behavior: HitTestBehavior.opaque,
-  gestures: <Type, GestureRecognizerFactory>{
-    // 1. 水平拖拽 - 图表滚动
-    HorizontalDragGestureRecognizer: ...,
+// 使用 Listener 跟踪手指数量
+return Listener(
+  onPointerDown: (_) => setState(() => _pointerCount++),
+  onPointerUp: (_) => setState(() => _pointerCount--),
+  onPointerCancel: (_) => setState(() => _pointerCount--),
+  child: RawGestureDetector(
+    behavior: HitTestBehavior.opaque,
+    gestures: <Type, GestureRecognizerFactory>{
+      // 统一的缩放手势 - 同时处理拖拽和缩放
+      ScaleGestureRecognizer: ...,
 
-    // 2. 缩放手势 - 双指缩放
-    ScaleGestureRecognizer: ...,
+      // 点击手势 - 切换十字线或绘制趋势线
+      TapGestureRecognizer: ...,
 
-    // 3. 点击手势 - 显示信息弹窗
-    TapGestureRecognizer: ...,
-
-    // 4. 长按手势 - 十字线和详情
-    LongPressGestureRecognizer: ...,
-  },
-  child: Stack(
-    children: [
-      CustomPaint(painter: painter),
-      if (widget.showInfoDialog) _buildInfoDialog()
-    ],
+      // 长按手势 - 显示十字线和详情
+      LongPressGestureRecognizer: ...,
+    },
+    child: Stack(
+      children: [
+        CustomPaint(painter: painter),
+        if (widget.showInfoDialog) _buildInfoDialog(),
+        if (_isLoadingAtLeft != null) _buildLoadingIndicator(),
+      ],
+    ),
   ),
 );
 ```
 
-#### 4.2 水平拖拽实现
+**架构优化**:
+- 使用 Listener 精确跟踪手指数量，避免手势竞技场冲突
+- 统一使用 ScaleGestureRecognizer 处理拖拽和缩放
+- 支持加载指示器和错误处理组件
 
-**文件位置**: [lib/candlestick_widget.dart:228](lib/candlestick_widget.dart#L228)
+#### 4.2 统一手势处理（拖拽+缩放）
 
-```dart
-HorizontalDragGestureRecognizer:
-  GestureRecognizerFactoryWithHandlers<HorizontalDragGestureRecognizer>(
-    () => HorizontalDragGestureRecognizer(),
-    (instance) {
-      instance
-        ..onStart = (details) {
-          isScale = true;
-          _boundaryOverscroll = 0.0;  // 重置边界滑动累积
-          _stopAnimation();
-        }
-        ..onUpdate = (details) {
-          if (isLongPress) return;
-
-          // 单指平移
-          final delta = details.delta.dx;
-          mScrollX = (delta / mScaleX + mScrollX)
-              .clamp(0.0, ChartPainter.maxScrollX)
-              .toDouble();
-
-          // 边界检测和回调
-          if (widget.onReachBoundary != null) {
-            // 在左边界且向右滑动
-            if (mScrollX <= 0 && delta > 0) {
-              _boundaryOverscroll += delta;
-              if (_boundaryOverscroll > 50) {
-                widget.onReachBoundary!(true);  // 触发加载更多
-                _boundaryOverscroll = 0.0;
-              }
-            }
-            // 在右边界且向左滑动
-            else if (mScrollX >= ChartPainter.maxScrollX && delta < 0) {
-              _boundaryOverscroll += delta.abs();
-              if (_boundaryOverscroll > 50) {
-                widget.onReachBoundary!(false);
-                _boundaryOverscroll = 0.0;
-              }
-            }
-          }
-
-          notifyChanged();
-        }
-        ..onEnd = (details) {
-          isScale = false;
-          var velocity = details.velocity.pixelsPerSecond.dx;
-          _onFling(velocity);  // 惯性滚动
-        };
-    },
-  ),
-```
-
-**交互细节**:
-- 考虑缩放比例的拖拽距离计算
-- 边界累积滑动距离，避免误触发
-- 惯性滚动增强用户体验
-
-#### 4.3 双指缩放实现
-
-**文件位置**: [lib/candlestick_widget.dart:285](lib/candlestick_widget.dart#L285)
+**文件位置**: [lib/candlestick_widget.dart:453](lib/candlestick_widget.dart#L453)
 
 ```dart
 ScaleGestureRecognizer:
@@ -537,37 +486,109 @@ ScaleGestureRecognizer:
     (instance) {
       instance
         ..onStart = (details) {
-          if (details.pointerCount >= 2) {
-            isScale = true;
-            _initialPointerCount = details.pointerCount;
-            _stopAnimation();
-          }
+          _lastPointerCount = _pointerCount;
+          _scaleBase = 1.0;
+          _scaleXBase = mScaleX;
+
+          // 计算锚点：用于焦点锚定缩放
+          _anchorScreenX = details.focalPoint.dx;
+          _anchorIndex = painter.calculateSelectedX(_anchorScreenX);
+
+          _boundaryOverscroll = 0.0;
         }
         ..onUpdate = (details) {
-          if (details.pointerCount >= 2) {
-            // 限制缩放范围在 0.2 ~ 4.0
-            mScaleX = (_lastScale * details.scale).clamp(0.2, 4.0);
+          if (isLongPress) return;
 
-            // 自动切换分时图模式
-            if (widget.autoSwitchToLine) {
-              _isAutoLine = mScaleX <= widget.lineThreshold;
-            }
-
-            notifyChanged();
+          // 滑动或缩放时自动隐藏十字线
+          if (_isCrossLocked) {
+            _isCrossLocked = false;
+            isOnTap = false;
+            mInfoWindowStream.sink.add(null);
           }
+
+          // 关键：检测手指数量变化，重置基线避免画面跳动
+          if (_pointerCount != _lastPointerCount) {
+            _scaleBase = details.scale;
+            _scaleXBase = mScaleX;
+            _anchorScreenX = details.focalPoint.dx;
+            _anchorIndex = painter.calculateSelectedX(_anchorScreenX);
+            _lastPointerCount = _pointerCount;
+          }
+
+          final isPinching = _pointerCount >= 2;
+
+          if (!isPinching) {
+            // ===== 单指模式：拖拽 =====
+            final dx = details.focalPointDelta.dx;
+            final delta = (dx / mScaleX) * widget.panSensitivity;
+            mScrollX = (mScrollX + delta)
+                .clamp(0.0, ChartPainter.maxScrollX)
+                .toDouble();
+
+            // 边界检测逻辑...
+          } else {
+            // ===== 双指模式：焦点锚定缩放 =====
+            isScale = true;
+            final relativeScale = details.scale / _scaleBase;
+            final newScaleX = (_scaleXBase * relativeScale).clamp(0.2, 4.0);
+
+            // 计算锚点在缩放后的新位置，调整 scrollX 保持锚点不动
+            final anchorLogicX = painter.getX(_anchorIndex);
+            final newTranslateX = _anchorScreenX / newScaleX - anchorLogicX;
+            // ...后续计算 scrollX
+          }
+          notifyChanged();
         }
         ..onEnd = (details) {
-          isScale = false;
-          _lastScale = mScaleX;
+          // 单指拖拽才启动惯性滚动
+          if (_pointerCount == 0 && _lastPointerCount == 1) {
+            var velocity = details.velocity.pixelsPerSecond.dx;
+            _onFling(velocity);
+          }
         };
     },
   ),
 ```
 
-**缩放特性**:
-- 支持 0.2 ~ 4 倍缩放
-- 缩放到阈值以下自动切换分时图
-- 记录最后缩放值，支持连续缩放
+**交互细节**:
+- 使用 `focalPointDelta` 避免受焦点定义变化影响
+- 支持 `panSensitivity` 灵敏度系数调整
+- 边界检测支持防抖（`debounceDelay`）和阈值配置（`boundaryThreshold`）
+- 焦点锚定缩放：缩放时保持双指焦点位置的 K 线不变
+
+#### 4.3 焦点锚定缩放算法
+
+**文件位置**: [lib/candlestick_widget.dart:553](lib/candlestick_widget.dart#L553)
+
+```dart
+// ===== 实现焦点锚定缩放 =====
+// 核心思路：缩放后调整 scrollX，使锚点索引仍显示在焦点位置
+
+// 1. 计算锚点在缩放前的逻辑坐标
+final anchorLogicX = painter.getX(_anchorIndex);
+
+// 2. 计算缩放后，要让锚点显示在 _anchorScreenX，需要的 mTranslateX
+// 公式推导：screenX = (logicX + mTranslateX) * scaleX
+// => mTranslateX = screenX / scaleX - logicX
+final newTranslateX = _anchorScreenX / newScaleX - anchorLogicX;
+
+// 3. 从 mTranslateX 反推 mScrollX
+// 根据 base_chart_painter.dart：mTranslateX = scrollX + getMinTranslateX()
+final dataLen = painter.mDataLen;
+final pointWidth = painter.mPointWidth;
+final minTranslateX = -dataLen + mWidth / newScaleX - pointWidth / 2
+    - widget.xFrontPadding / newScaleX;  // 使用动态边距
+final effectiveMinTranslateX = minTranslateX >= 0 ? 0.0 : minTranslateX;
+
+mScrollX = (newTranslateX - effectiveMinTranslateX)
+    .clamp(0.0, ChartPainter.maxScrollX)
+    .toDouble();
+```
+
+**算法优势**:
+- 双指缩放时，焦点位置的 K 线保持不动
+- 使用动态边距（`xFrontPadding / scaleX`）确保边界计算正确
+- 支持任意缩放比例下的精确定位
 
 #### 4.4 惯性滚动动画
 
@@ -616,54 +637,109 @@ void _onFling(double x) {
 
 ### 第五步：十字线和信息弹窗
 
-#### 5.1 十字线绘制
+#### 5.1 十字线绘制（支持虚线）
 
-**文件位置**: [lib/renderer/chart_painter.dart:537](lib/renderer/chart_painter.dart#L537)
+**文件位置**: [lib/renderer/chart_painter.dart:552](lib/renderer/chart_painter.dart#L552)
 
 ```dart
 void drawCrossLine(Canvas canvas, Size size) {
   var index = calculateSelectedX(selectX);
   KLineEntity point = getItem(index);
-
   double x = getX(index);
   double y = getMainY(point.close);
 
-  // 垂直线
+  // 竖线 Paint：补偿 scaleX 对线宽的影响
   Paint paintY = Paint()
     ..color = this.chartColors.vCrossColor
-    ..strokeWidth = this.chartStyle.vCrossWidth
+    ..strokeWidth = this.chartStyle.vCrossWidth / scaleX
     ..isAntiAlias = true;
-  canvas.drawLine(
-    Offset(x, mTopPadding),
-    Offset(x, size.height - mBottomPadding),
-    paintY
-  );
 
-  // 水平线
+  // 横线 Paint：保持原始线宽
   Paint paintX = Paint()
     ..color = this.chartColors.hCrossColor
     ..strokeWidth = this.chartStyle.hCrossWidth
     ..isAntiAlias = true;
-  canvas.drawLine(
-    Offset(-mTranslateX, y),
-    Offset(-mTranslateX + mWidth / scaleX, y),
-    paintX
-  );
 
-  // 中心点圆圈（根据缩放自适应大小）
-  if (scaleX >= 1) {
-    canvas.drawOval(
-      Rect.fromCenter(center: Offset(x, y), height: 2.0 * scaleX, width: 2.0),
-      paintX,
-    );
+  if (chartStyle.crossLineDash) {
+    // 竖线虚线：补偿 scaleX
+    _drawDashedLineCompensated(canvas,
+        Offset(x, mTopPadding),
+        Offset(x, size.height - mBottomPadding),
+        paintY, scaleX);
+    // 横线虚线：补偿 scaleX 拉伸
+    _drawDashedLineHorizontalCompensated(canvas,
+        Offset(-mTranslateX, y),
+        Offset(-mTranslateX + mWidth / scaleX, y),
+        paintX, scaleX);
   } else {
-    canvas.drawOval(
-      Rect.fromCenter(center: Offset(x, y), height: 2.0, width: 2.0 / scaleX),
-      paintX,
-    );
+    // 实线绘制
+    canvas.drawLine(Offset(x, mTopPadding),
+        Offset(x, size.height - mBottomPadding), paintY);
+    canvas.drawLine(Offset(-mTranslateX, y),
+        Offset(-mTranslateX + mWidth / scaleX, y), paintX);
   }
+
+  // 绘制中心圆点：使用 drawOval 补偿 scaleX，保持视觉上的圆形
+  Paint paintDot = Paint()
+    ..color = this.chartColors.hCrossColor
+    ..style = PaintingStyle.fill;
+  double radius = 3.0;
+  canvas.drawOval(
+    Rect.fromCenter(
+      center: Offset(x, y),
+      width: radius * 2 / scaleX,  // 水平方向补偿缩放
+      height: radius * 2,
+    ),
+    paintDot,
+  );
 }
 ```
+
+#### 5.2 虚线绘制算法（带 scaleX 补偿）
+
+**文件位置**: [lib/renderer/chart_painter.dart:609](lib/renderer/chart_painter.dart#L609)
+
+```dart
+/// 绘制虚线（用于竖线）
+void _drawDashedLineCompensated(
+    Canvas canvas, Offset start, Offset end, Paint paint, double scaleX) {
+  final dashLength = chartStyle.crossLineDashLength;
+  final dashSpace = chartStyle.crossLineDashSpace;
+
+  final dx = end.dx - start.dx;
+  final dy = end.dy - start.dy;
+  final distance = math.sqrt(dx * dx + dy * dy);
+  final unitX = dx / distance;
+  final unitY = dy / distance;
+
+  double currentDistance = 0;
+  while (currentDistance < distance) {
+    final segmentEnd = (currentDistance + dashLength).clamp(0.0, distance);
+    canvas.drawLine(
+      Offset(start.dx + unitX * currentDistance,
+          start.dy + unitY * currentDistance),
+      Offset(start.dx + unitX * segmentEnd, start.dy + unitY * segmentEnd),
+      paint,
+    );
+    currentDistance += dashLength + dashSpace;
+  }
+}
+
+/// 绘制虚线（用于横线，补偿 scaleX 拉伸）
+void _drawDashedLineHorizontalCompensated(
+    Canvas canvas, Offset start, Offset end, Paint paint, double scaleX) {
+  // 横线沿 X 轴绘制，会被 canvas.scale(scaleX, 1.0) 拉伸
+  // 需要将 dashLength 和 dashSpace 除以 scaleX 补偿
+  final dashLength = chartStyle.crossLineDashLength / scaleX;
+  final dashSpace = chartStyle.crossLineDashSpace / scaleX;
+  // ... 后续逻辑同上
+}
+```
+
+**虚线配置项**（ChartStyle）:
+- `crossLineDash`: 是否使用虚线（默认 true）
+- `crossLineDashLength`: 虚线段长度（默认 4.0）
+- `crossLineDashSpace`: 虚线间隔长度（默认 3.0）
 
 #### 5.2 价格和日期标签
 
@@ -769,13 +845,14 @@ Widget _buildInfoDialog() {
 
 ### 1. 可见区域裁剪
 
-**文件位置**: [lib/renderer/base_chart_painter.dart:217](lib/renderer/base_chart_painter.dart#L217)
+**文件位置**: [lib/renderer/base_chart_painter.dart:228](lib/renderer/base_chart_painter.dart#L228)
 
 ```dart
 calculateValue() {
   if (datas == null || datas!.isEmpty) return;
 
-  maxScrollX = getMinTranslateX().abs();
+  // 更新最大滚动距离，包括左右两侧的留白区域
+  maxScrollX = getMinTranslateX().abs() + getMaxTranslateX();
   setTranslateXFromScrollX(scrollX);
 
   // 只计算可见范围的索引
@@ -796,6 +873,7 @@ calculateValue() {
 - 避免绘制屏幕外的数据
 - 大数据集（10000+ K 线）也能流畅滚动
 - 减少 CPU 和内存占用
+- 支持动态边距（`xFrontPadding`, `xBackPadding`）
 
 ### 2. 路径重用和重置
 
@@ -822,7 +900,7 @@ drawPolyline(...) {
 
 ### 3. 智能重绘判断
 
-**文件位置**: [lib/renderer/base_chart_painter.dart:426](lib/renderer/base_chart_painter.dart#L426)
+**文件位置**: [lib/renderer/base_chart_painter.dart:517](lib/renderer/base_chart_painter.dart#L517)
 
 ```dart
 @override
@@ -838,6 +916,120 @@ bool shouldRepaint(BaseChartPainter oldDelegate) {
          oldDelegate.scrollX != scrollX ||
          oldDelegate.selectX != selectX ||
          oldDelegate.datas != datas;
+}
+```
+
+### 4. 动态宽度算法
+
+**文件位置**: [lib/renderer/main_renderer.dart:342](lib/renderer/main_renderer.dart#L342)
+
+#### 4.1 动态影线宽度
+
+当缩放到最小时，影线宽度逐渐增加至与实体宽度相同，避免影线过细看不清。
+
+```dart
+/// 计算动态影线宽度
+double _calculateDynamicShadowWidth() {
+  // 功能未启用时，使用默认宽度
+  if (!this.chartStyle.enableDynamicShadowWidth) {
+    return mCandleLineWidth;
+  }
+
+  final start = this.chartStyle.shadowWidthTransitionStart;  // 0.3
+  final end = this.chartStyle.shadowWidthTransitionEnd;      // 0.2
+
+  // 缩放级别高于过渡起点，使用默认影线宽度
+  if (scaleX >= start) return mCandleLineWidth;
+
+  // 缩放级别低于过渡终点，影线宽度等于实体宽度
+  if (scaleX <= end) return mCandleWidth;
+
+  // 在过渡区间内，线性插值计算影线宽度
+  final progress = (start - scaleX) / (start - end);
+  return mCandleLineWidth + (mCandleWidth - mCandleLineWidth) * progress;
+}
+```
+
+**配置项**（ChartStyle）:
+- `enableDynamicShadowWidth`: 是否启用（默认 true）
+- `shadowWidthTransitionStart`: 开始过渡的 scaleX（默认 0.3）
+- `shadowWidthTransitionEnd`: 完全过渡的 scaleX（默认 0.2）
+
+#### 4.2 动态指标线宽
+
+**文件位置**: [lib/renderer/main_renderer.dart:377](lib/renderer/main_renderer.dart#L377)
+
+```dart
+/// 计算主图技术指标的动态线宽
+double _calculateMainIndicatorWidth() {
+  if (!this.chartStyle.enableDynamicMainIndicatorWidth) {
+    return this.chartStyle.mainIndicatorBaseWidth;
+  }
+
+  // 基础宽度 / scaleX，补偿缩放效果
+  final baseWidth = this.chartStyle.mainIndicatorBaseWidth / scaleX;
+
+  // 最大宽度 = min(固定上限, K 线实体宽度)
+  final maxWidth = this.chartStyle.mainIndicatorMaxWidth < mCandleWidth
+      ? this.chartStyle.mainIndicatorMaxWidth
+      : mCandleWidth;
+
+  return baseWidth > maxWidth ? maxWidth : baseWidth;
+}
+```
+
+**配置项**（ChartStyle）:
+- `enableDynamicMainIndicatorWidth`: 主图指标是否启用（默认 false）
+- `mainIndicatorBaseWidth`: 基础宽度（默认 1.5）
+- `mainIndicatorMaxWidth`: 最大宽度上限（默认 3.0）
+- `enableDynamicSecondaryIndicatorWidth`: 副图指标是否启用（默认 false）
+- `secondaryIndicatorBaseWidth`: 基础宽度（默认 1.2）
+- `secondaryIndicatorMaxWidth`: 最大宽度上限（默认 3.0）
+
+### 5. 视口状态快照
+
+**文件位置**: [lib/candlestick_widget.dart:19](lib/candlestick_widget.dart#L19)
+
+在加载历史数据时，保持当前可见 K 线位置不变：
+
+```dart
+/// 视口状态快照
+class ViewportSnapshot {
+  final int dataLength;   // 快照时数据的总长度
+  final double scrollX;   // 快照时的 scrollX 值
+  final double scaleX;    // 快照时的 scaleX 值
+}
+
+// 使用示例
+void loadHistoricalData() async {
+  // 1. 加载前保存快照
+  final snapshot = chartKey.currentState?.createViewportSnapshot();
+
+  // 2. 加载数据
+  final newData = await api.loadHistory();
+  final oldLength = data.length;
+  data.insertAll(0, newData);  // 在前面插入历史数据
+
+  // 3. 恢复视口位置
+  final addedCount = data.length - oldLength;
+  chartKey.currentState?.restoreViewport(snapshot!, addedCount);
+}
+```
+
+**文件位置**: [lib/candlestick_widget.dart:878](lib/candlestick_widget.dart#L878)
+
+```dart
+/// 恢复视口位置
+void restoreViewport(ViewportSnapshot snapshot, int newDataCount) {
+  if (widget.datas == null || widget.datas!.isEmpty) return;
+
+  // 如果是左侧加载历史数据（newDataCount > 0），需要增加 scrollX 来补偿
+  final newScrollX = snapshot.scrollX + newDataCount;
+
+  setState(() {
+    mScaleX = snapshot.scaleX;
+    mScrollX = newScrollX.clamp(0.0, ChartPainter.maxScrollX).toDouble();
+  });
 }
 ```
 
@@ -884,8 +1076,9 @@ CandlestickWidget(
     // isLeft = false: 加载最新数据
     print('加载更多: ${isLeft ? "历史" : "最新"}');
   },
-  onReachBoundary: (isLeft) {
-    // 滑动到边界回调
+  onReachBoundary: (isLeft) async {
+    // 滑动到边界回调，支持异步加载
+    await loadMoreData(isLeft);
   },
 )
 ```
@@ -898,17 +1091,46 @@ CandlestickWidget(
   ChartStyle(
     pointWidth: 11.0,           // K 线宽度
     candleWidth: 8.5,           // 蜡烛宽度
-    candleLineWidth: 1.5,       // 影线宽度
+    candleLineWidth: 1.0,       // 影线宽度
     gridRows: 4,                // 网格行数
     gridColumns: 4,             // 网格列数
+
+    // ===== 价格弹窗样式 =====
+    popupTitleFontSize: 10.0,   // 弹窗标题字体大小
+    popupValueFontSize: 10.0,   // 弹窗值字体大小
+    popupPadding: EdgeInsets.fromLTRB(6.0, 6.0, 6.0, 0.0),
+    popupItemSpacing: 3.0,      // 每行底部间距
+    popupBorderWidth: 0,        // 边框宽度（0 则无边框）
+    popupBorderRadius: 0.0,     // 边框圆角
+
+    // ===== 动态影线宽度 =====
+    enableDynamicShadowWidth: true,       // 启用动态影线宽度
+    shadowWidthTransitionStart: 0.3,      // 开始过渡的缩放阈值
+    shadowWidthTransitionEnd: 0.2,        // 完全过渡的缩放阈值
+
+    // ===== 动态指标线宽 =====
+    enableDynamicMainIndicatorWidth: false,     // 主图指标动态线宽
+    mainIndicatorBaseWidth: 1.5,                // 基础宽度（scaleX=1.0时）
+    mainIndicatorMaxWidth: 3.0,                 // 最大宽度上限
+    enableDynamicSecondaryIndicatorWidth: false, // 副图指标动态线宽
+    secondaryIndicatorBaseWidth: 1.2,           // 基础宽度
+    secondaryIndicatorMaxWidth: 3.0,            // 最大宽度上限
+
+    // ===== 十字线虚线 =====
+    crossLineDash: true,        // 使用虚线
+    crossLineDashLength: 4.0,   // 虚线段长度
+    crossLineDashSpace: 3.0,    // 虚线间隔长度
+
+    // ===== 日期行 =====
+    dateRowHeight: 20.0,        // 日期行高度（K线图正下方）
   ),
   ChartColors(
-    bgColor: Color(0xff18191d),
-    upColor: Color(0xff00ff00),
-    dnColor: Color(0xffff0000),
-    ma5Color: Color(0xffC9B885),
-    ma10Color: Color(0xff6CB0A6),
-    ma30Color: Color(0xff9979C6),
+    bgColor: Color(0xffffffff),
+    upColor: Color(0xFF14AD8F),
+    dnColor: Color(0xFFD5405D),
+    ma5Color: Color(0xffE5B767),
+    ma10Color: Color(0xff1FD1AC),
+    ma30Color: Color(0xffB48CE3),
   ),
   mainStateLi: {MainState.MA, MainState.BOLL},
   secondaryStateLi: {SecondaryState.MACD, SecondaryState.KDJ},
@@ -921,6 +1143,23 @@ CandlestickWidget(
   priceFormatter: (price) => '\$${price.toStringAsFixed(2)}',
   autoSwitchToLine: true,        // 缩放到阈值自动切换分时图
   lineThreshold: 0.5,            // 切换阈值
+  panSensitivity: 1.0,           // 拖动灵敏度系数
+
+  // ===== 边界加载配置 =====
+  xFrontPadding: 100,            // 右侧留白（最新数据端）
+  xBackPadding: 100,             // 左侧留白（历史数据端）
+  boundaryThreshold: 50.0,       // 边界触发阈值（像素）
+  debounceDelay: 1000,           // 防抖延迟（毫秒）
+
+  // ===== 加载指示器 =====
+  loadingIndicatorBuilder: (isLeft) => Container(
+    padding: EdgeInsets.all(8),
+    child: CircularProgressIndicator(),
+  ),
+  loadingErrorBuilder: (isLeft, error, retry) => TextButton(
+    onPressed: retry,
+    child: Text('加载失败，点击重试'),
+  ),
 )
 ```
 
@@ -932,28 +1171,36 @@ CandlestickWidget(
 - ✅ 分层架构：数据层 → 计算层 → 渲染层 → 交互层
 - ✅ Mixin 组合模式实现指标模块化
 - ✅ 抽象类和模板方法确保绘制流程一致性
+- ✅ 统一手势处理架构，避免手势竞技场冲突
 
 ### 2. 算法优化
 - ✅ 滑动窗口算法计算 MA，时间复杂度 O(n)
 - ✅ 二分查找定位可见数据，时间复杂度 O(log n)
 - ✅ 可见区域裁剪，避免无效绘制
+- ✅ 动态宽度算法，根据缩放级别平滑调整线条粗细
+- ✅ 焦点锚定缩放，保持双指焦点位置的 K 线不变
 
 ### 3. 渲染优化
 - ✅ Canvas 直接绘制，性能优于 Widget 组合
 - ✅ 路径对象复用，减少 GC 压力
 - ✅ 贝塞尔曲线实现平滑折线
+- ✅ 十字线虚线绘制，带 scaleX 补偿
+- ✅ 动态边距计算，缩放时保持视觉一致
 
 ### 4. 交互体验
-- ✅ 多手势识别器组合（拖拽、缩放、点击、长按）
-- ✅ 惯性滚动动画，自然流畅
-- ✅ 边界累积触发，避免误操作
-- ✅ 动态信息弹窗，智能避开十字线
+- ✅ 统一 ScaleGestureRecognizer 处理拖拽和缩放
+- ✅ 惯性滚动动画，支持灵敏度调节
+- ✅ 边界检测带防抖和阈值配置
+- ✅ 十字线锁定显示，点击切换状态
+- ✅ 加载指示器和错误处理支持
+- ✅ 视口快照，加载历史数据时保持位置
 
 ### 5. 扩展性
-- ✅ 支持自定义样式和颜色
+- ✅ 支持自定义样式和颜色（包括弹窗样式）
 - ✅ 支持自定义时间格式
 - ✅ 支持自定义价格格式化
 - ✅ 支持多种技术指标组合
+- ✅ 丰富的配置项（动态宽度、十字线、日期行等）
 
 ---
 
@@ -961,17 +1208,19 @@ CandlestickWidget(
 
 | 文件路径 | 功能说明 |
 |---------|---------|
-| [lib/candlestick_widget.dart](lib/candlestick_widget.dart) | 主 Widget，处理手势和状态管理 |
-| [lib/renderer/chart_painter.dart](lib/renderer/chart_painter.dart) | 绘制协调器，管理渲染流程 |
-| [lib/renderer/base_chart_painter.dart](lib/renderer/base_chart_painter.dart) | 绘制基类，定义坐标系统 |
-| [lib/renderer/main_renderer.dart](lib/renderer/main_renderer.dart) | 主图渲染器（蜡烛图、MA、BOLL） |
+| [lib/candlestick_widget.dart](lib/candlestick_widget.dart) | 主 Widget，处理手势和状态管理、视口快照 |
+| [lib/renderer/chart_painter.dart](lib/renderer/chart_painter.dart) | 绘制协调器，管理渲染流程、十字线虚线绘制 |
+| [lib/renderer/base_chart_painter.dart](lib/renderer/base_chart_painter.dart) | 绘制基类，定义坐标系统和动态边距 |
+| [lib/renderer/main_renderer.dart](lib/renderer/main_renderer.dart) | 主图渲染器（蜡烛图、MA、BOLL、SAR）、动态宽度算法 |
 | [lib/renderer/vol_renderer.dart](lib/renderer/vol_renderer.dart) | 成交量渲染器 |
-| [lib/renderer/secondary_renderer.dart](lib/renderer/secondary_renderer.dart) | 副图渲染器（MACD、KDJ 等） |
+| [lib/renderer/secondary_renderer.dart](lib/renderer/secondary_renderer.dart) | 副图渲染器（MACD、KDJ、RSI、WR、CCI） |
+| [lib/renderer/base_dimension.dart](lib/renderer/base_dimension.dart) | 尺寸计算器，管理各区域高度 |
 | [lib/entity/k_line_entity.dart](lib/entity/k_line_entity.dart) | K 线数据模型 |
 | [lib/entity/k_entity.dart](lib/entity/k_entity.dart) | 指标数据混入基类 |
 | [lib/utils/data_util.dart](lib/utils/data_util.dart) | 技术指标计算工具 |
-| [lib/chart_style.dart](lib/chart_style.dart) | 样式配置 |
+| [lib/chart_style.dart](lib/chart_style.dart) | 样式配置（动态宽度、十字线、弹窗样式等） |
 | [lib/chart_colors.dart](lib/chart_colors.dart) | 颜色配置 |
+| [lib/components/popup_info_view.dart](lib/components/popup_info_view.dart) | 价格信息弹窗组件 |
 
 ---
 
@@ -982,8 +1231,9 @@ CandlestickWidget(
 核心实现思路：
 1. **数据驱动**: 使用规范的数据模型，通过计算工具统一处理
 2. **分层渲染**: 主图、成交量、副图独立渲染，职责清晰
-3. **精确坐标**: 建立完善的坐标转换体系，支持缩放和滚动
-4. **流畅交互**: 多手势组合，惯性动画，边界检测
-5. **性能优先**: 可见区域裁剪，对象复用，智能重绘
+3. **精确坐标**: 建立完善的坐标转换体系，支持缩放、滚动和动态边距
+4. **流畅交互**: 统一手势处理，焦点锚定缩放，惯性动画，边界检测
+5. **性能优先**: 可见区域裁剪，对象复用，动态宽度算法
+6. **高度可配置**: 丰富的样式配置项，支持深度定制
 
 掌握这些技术，你也可以实现复杂的自定义图表组件！
