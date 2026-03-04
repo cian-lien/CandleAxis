@@ -96,3 +96,8 @@ example/linux/flutter/generated_plugins.cmake
 # Documentation (optional - uncomment if you don't want to track these)
 #*.md
 #docs/
+
+# Learning and annotation docs
+candlestick-principle.md
+candlestick-learn.md
+code-annotation.md
