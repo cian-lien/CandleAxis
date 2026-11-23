@@ -11,16 +11,7 @@ extension _AIGunCandlestickChart on _AIGunCandlestickState {
       ..riseCandleBodyStyle = _riseCandleBodyStyle
       ..fallCandleBodyStyle = _fallCandleBodyStyle;
     final chart = RepaintBoundary(
-      child: ValueListenableBuilder<ChartWatermarkPicture?>(
-        valueListenable: candlestickWatermark(),
-        builder: (context, watermark, _) => _buildChartWidget(
-          context,
-          candlestickState,
-          state,
-          baseHeight,
-          watermark,
-        ),
-      ),
+      child: _buildChartWidget(context, candlestickState, state, baseHeight),
     );
     if (!_isEmbedded) return chart;
     return Stack(
@@ -47,7 +38,6 @@ extension _AIGunCandlestickChart on _AIGunCandlestickState {
     CandlestickState candlestickState,
     SelectionParamsState state,
     double baseHeight,
-    ChartWatermarkPicture? watermark,
   ) {
     final locale = Localizations.localeOf(context).toLanguageTag();
     return CandlestickWidget(
@@ -153,7 +143,7 @@ extension _AIGunCandlestickChart on _AIGunCandlestickState {
         widget.avgSellPrice,
       ),
       showAvgPriceLines: _showAvgPriceLines,
-      watermarkPicture: watermark,
+      watermarkText: 'CandleAxis',
       watermarkColor: AppColors.textQuaternary(context).withValues(alpha: 0.24),
       chartTranslations: ChartTranslations(
         indicatorTextFormatter: (key) => switch (key) {

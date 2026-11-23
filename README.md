@@ -1,6 +1,6 @@
-# CandleX
+# CandleAxis
 
-CandleX is a Flutter package for interactive financial charts. It includes the candlestick chart renderer and a standalone iOS and Android demo based on AIGun's chart interface. The demo replays local BTC/USD sample data.
+CandleAxis is a Flutter package for interactive financial charts. It includes the candlestick chart renderer and a standalone iOS and Android demo based on AIGun's chart interface. The demo replays local BTC/USD sample data.
 
 ## Run the mobile demo
 
@@ -26,14 +26,14 @@ Add the local checkout to your Flutter app's `pubspec.yaml`. Adjust the path rel
 
 ```yaml
 dependencies:
-  candlestick:
-    path: ../candlex
+  candle_axis:
+    path: ../CandleAxis
 ```
 
 Supply `KLineEntity` candles in chronological order, oldest first, with timestamps in Unix milliseconds. Populate open, high, low, close, and volume. Run `IndicatorCalculator.calculate(candles)` when you load or update the series so the selected indicators have values to render.
 
 ```dart
-import 'package:candlestick/candlestick.dart';
+import 'package:candle_axis/candle_axis.dart';
 import 'package:flutter/widgets.dart';
 
 Widget buildPriceChart(List<KLineEntity> candles) {
@@ -59,7 +59,7 @@ The widget supports drag-to-pan, pinch-to-zoom, crosshair inspection, and price-
 
 | Path | Contents |
 | --- | --- |
-| [`lib/candlestick.dart`](lib/candlestick.dart) | Package entry point and public exports |
+| [`lib/candle_axis.dart`](lib/candle_axis.dart) | Package entry point and public exports |
 | [`lib/renderer/`](lib/renderer/) | Candlestick, volume, indicator, and overlay rendering |
 | [`lib/indicators/`](lib/indicators/) | Indicator calculation and presentation |
 | [`lib/drawing/`](lib/drawing/) | Drawing tools, editing, and measurements |
@@ -67,4 +67,4 @@ The widget supports drag-to-pan, pinch-to-zoom, crosshair inspection, and price-
 
 ## Acknowledgments
 
-CandleX builds on OpenFlutter's [k_chart](https://github.com/OpenFlutter/k_chart). The current chart implementation and mobile interface were ported from AIGun.
+CandleAxis builds on OpenFlutter's [k_chart](https://github.com/OpenFlutter/k_chart). The current chart implementation and mobile interface were ported from AIGun.

@@ -1,6 +1,6 @@
 import 'dart:math';
 
-import 'package:candlestick/candlestick.dart';
+import 'package:candle_axis/candle_axis.dart';
 
 import 'core/enums/timeframe.dart';
 

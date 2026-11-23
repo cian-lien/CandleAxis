@@ -1,4 +1,4 @@
-import 'package:candlestick/candlestick.dart';
+import 'package:candle_axis/candle_axis.dart';
 
 import '../../../../../core/enums/candle_source.dart';
 import '../history/history_candlestick_state.dart';

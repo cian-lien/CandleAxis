@@ -69,7 +69,7 @@ class _KlineShareCaptureState extends State<KlineShareCapture> {
                       await SharePlus.instance.share(
                         ShareParams(
                           files: [XFile.fromData(bytes, mimeType: 'image/png')],
-                          fileNameOverrides: const ['candlex-kline.png'],
+                          fileNameOverrides: const ['candle-axis-kline.png'],
                           sharePositionOrigin:
                               box.localToGlobal(Offset.zero) & box.size,
                         ),
@@ -107,7 +107,7 @@ class _KlineShareCaptureState extends State<KlineShareCapture> {
     try {
       await Gal.putImageBytes(
         bytes,
-        name: 'candlex-kline-${DateTime.now().millisecondsSinceEpoch}',
+        name: 'candle-axis-kline-${DateTime.now().millisecondsSinceEpoch}',
       );
       if (!mounted || !sheetContext.mounted) return;
       Navigator.of(sheetContext).pop();

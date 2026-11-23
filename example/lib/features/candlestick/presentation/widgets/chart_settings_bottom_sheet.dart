@@ -1,7 +1,7 @@
 import 'dart:math' as math;
 
-import 'package:candlestick/candlestick_widget.dart';
-import 'package:candlestick/chart_style.dart';
+import 'package:candle_axis/candlestick_widget.dart';
+import 'package:candle_axis/chart_style.dart';
 import 'package:flutter/material.dart';
 
 import '../../../../l10n/l10n.dart';

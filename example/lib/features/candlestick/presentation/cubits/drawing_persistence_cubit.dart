@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:candlestick/drawing/drawing.dart';
+import 'package:candle_axis/drawing/drawing.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../infrastructure/datasource/drawing_storage.dart';

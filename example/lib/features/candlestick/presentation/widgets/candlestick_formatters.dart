@@ -1,4 +1,4 @@
-import 'package:candlestick/candlestick.dart';
+import 'package:candle_axis/candle_axis.dart';
 
 import '../../../../core/formatting/number_format_core.dart';
 

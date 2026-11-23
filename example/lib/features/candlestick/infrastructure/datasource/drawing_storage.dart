@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:candlestick/drawing/drawing.dart';
+import 'package:candle_axis/drawing/drawing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../../core/types/result.dart';

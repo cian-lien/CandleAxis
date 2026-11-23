@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:candlestick/candlestick.dart' hide S;
+import 'package:candle_axis/candle_axis.dart' hide S;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -43,7 +43,7 @@ class MyApp extends StatelessWidget {
     minTextAdapt: true,
     splitScreenMode: true,
     builder: (context, child) => MaterialApp(
-      title: 'CandleX',
+      title: 'CandleAxis',
       debugShowCheckedModeBanner: false,
       locale: const Locale('zh'),
       supportedLocales: S.supportedLocales,

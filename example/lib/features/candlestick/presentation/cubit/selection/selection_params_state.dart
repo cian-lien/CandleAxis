@@ -1,4 +1,4 @@
-import 'package:candlestick/candlestick_widget.dart';
+import 'package:candle_axis/candlestick_widget.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 
 import '../../../../../core/enums/timeframe.dart';

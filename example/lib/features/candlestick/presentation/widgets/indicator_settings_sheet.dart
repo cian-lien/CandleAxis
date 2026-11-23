@@ -1,4 +1,4 @@
-import 'package:candlestick/candlestick_widget.dart';
+import 'package:candle_axis/candlestick_widget.dart';
 import 'package:flutter/material.dart';
 
 import '../../../../l10n/l10n.dart';

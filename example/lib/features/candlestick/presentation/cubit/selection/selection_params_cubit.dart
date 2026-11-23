@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:candlestick/candlestick_widget.dart';
+import 'package:candle_axis/candlestick_widget.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../../../core/enums/candle_source.dart';

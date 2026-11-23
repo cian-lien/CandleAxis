@@ -1,6 +1,6 @@
 import 'package:freezed_annotation/freezed_annotation.dart';
 
-import 'package:candlestick/candlestick.dart';
+import 'package:candle_axis/candle_axis.dart';
 
 part 'history_candlestick_state.freezed.dart';
 
