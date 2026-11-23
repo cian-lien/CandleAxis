@@ -1,83 +1,70 @@
 # CandleX
 
-一个用于金融数据可视化的 Flutter K 线图组件。
+CandleX is a Flutter package for interactive financial charts. It includes the candlestick chart renderer and a standalone iOS and Android demo based on AIGun's chart interface. The demo replays local BTC/USD sample data.
 
-## 功能特性
+## Run the mobile demo
 
-- **K 线图**：支持蜡烛图和分时图模式
-- **技术指标**：MA（均线）、BOLL（布林带）、SAR（抛物线转向）、MACD、KDJ、RSI、WR、CCI
-- **深度图**：订单簿可视化
-- **手势交互**：拖拽、双指缩放、长按十字线、点击切换十字线
-- **趋势线**：支持绘制趋势线
-- **自定义样式**：颜色、尺寸、弹窗信息、网格、价格格式化
-- **边界加载**：滚动到边缘时自动触发数据加载，支持防抖和错误处理
-- **国际化**：可配置文本翻译
+From the repository root, start an iOS simulator or Android emulator, or connect a phone. Use the device ID listed by `flutter devices`.
 
-## 快速开始
+```sh
+cd example
+flutter pub get
+flutter devices
+flutter run -d DEVICE_ID
+```
 
-在 `pubspec.yaml` 中添加依赖：
+The mobile demo was verified with Flutter 3.47.5. Use JDK 21 for the Android build with the included Gradle 8.14 wrapper.
+
+- **Timeframes and indicators** — Open the timeframe menu to choose among 15 intervals from 30 seconds to 3 months or edit the shortcuts. Use the indicator bar to toggle overlays and lower panels, or open indicator settings to select several at once.
+- **Chart settings** — Switch between candlesticks and a line chart, display prices or market cap, and adjust chart height, candle colors, and filled or hollow candle bodies. Toggle buy and sell markers and average-price lines independently, and open trade history from the selected candle's details.
+- **Fullscreen and drawing** — Use the button in the lower-left corner of the chart to open landscape fullscreen. Enable portrait fullscreen in chart settings to open in portrait. Both views support drawing tools, range statistics, undo and redo, and screenshot sharing or saving to Photos. Drawings and chart preferences are saved on the device.
+- **Simulated orders** — Tap the crosshair price label to open a simulated limit order with the selected price filled in.
+
+## Use the chart package
+
+Add the local checkout to your Flutter app's `pubspec.yaml`. Adjust the path relative to that file.
 
 ```yaml
 dependencies:
   candlestick:
-    path: ../  # 或你的包路径
+    path: ../candlex
 ```
 
-## 使用方法
+Supply `KLineEntity` candles in chronological order, oldest first, with timestamps in Unix milliseconds. Populate open, high, low, close, and volume. Run `IndicatorCalculator.calculate(candles)` when you load or update the series so the selected indicators have values to render.
 
 ```dart
 import 'package:candlestick/candlestick.dart';
+import 'package:flutter/widgets.dart';
 
-// 1. 准备数据
-List<KLineEntity> data = [...]; // 你的 OHLC 数据
-DataUtil.calculate(data);       // 计算所有技术指标
-
-// 2. 使用组件
-CandlestickWidget(
-  data,
-  ChartStyle(),
-  ChartColors(),
-  isTrendLine: false,
-  mainStateLi: {MainState.MA},
-  secondaryStateLi: {SecondaryState.MACD},
-)
+Widget buildPriceChart(List<KLineEntity> candles) {
+  return SizedBox(
+    height: 420,
+    child: CandlestickWidget(
+      candles,
+      ChartStyle(),
+      ChartColors(),
+      isTrendLine: false,
+      isTapShowInfoDialog: true,
+      mBaseHeight: 300,
+      mainStateLi: const {MainState.MA},
+      secondaryStateLi: const {SecondaryState.MACD},
+    ),
+  );
+}
 ```
 
-## 运行移动端演示
+The widget supports drag-to-pan, pinch-to-zoom, crosshair inspection, and price-axis scaling. Set `isLine` for a line chart, supply `onReachBoundary` to load more candles, or attach a `ChartDrawingController` to enable drawing. `DepthChart` is available for order book visualization.
 
-```bash
-cd example
-flutter devices
-flutter run -d "设备 ID"
-```
+## Repository layout
 
-演示面向 iOS 和 Android，使用本地 BTC/USD 模拟行情。周期栏的「更多」可选择 15 个周期和编辑常用周期。底部的指标设置支持同时选择多个主图和副图指标。
+| Path | Contents |
+| --- | --- |
+| [`lib/candlestick.dart`](lib/candlestick.dart) | Package entry point and public exports |
+| [`lib/renderer/`](lib/renderer/) | Candlestick, volume, indicator, and overlay rendering |
+| [`lib/indicators/`](lib/indicators/) | Indicator calculation and presentation |
+| [`lib/drawing/`](lib/drawing/) | Drawing tools, editing, and measurements |
+| [`example/`](example/) | Mobile demo, sample market data, local preferences, and interaction tests |
 
-图表设置可切换价格与市值、配置涨跌色和蜡烛样式、调节高度，以及分别开关交易点位和平均价线。左下角全屏按钮默认打开横屏，开启「竖屏全屏K线」后可进入竖屏全屏。两种全屏模式都可绘图、查看区间统计、分享截图或保存到相册，设置与已完成的画图会保存到本机。
+## Acknowledgments
 
-Android 工程使用 Gradle 8.14，可用 JDK 21 构建。
-
-## 项目结构
-
-```
-lib/
-├── candlestick.dart          # 库入口，导出
-├── candlestick_widget.dart   # 主图表组件（手势、布局）
-├── chart_style.dart          # ChartColors 和 ChartStyle 配置
-├── chart_translations.dart   # 国际化文本定义
-├── depth_chart.dart          # 深度图（订单簿）
-├── components/               # UI 组件（弹窗信息视图）
-├── entity/                   # 数据模型（KLineEntity 等）
-├── renderer/                 # Canvas 绘制器（主图、成交量、副图）
-├── extension/                # Dart 扩展
-└── utils/                    # DataUtil（指标计算）、日期/数字工具
-```
-
-## 环境要求
-
-- Dart SDK: `>=3.0.5 <4.0.0`
-- Flutter
-
-## 致谢
-
-本项目基于 [k_chart](https://github.com/OpenFlutter/k_chart) (OpenFlutter) 开发，感谢原作者的优秀工作！
+CandleX builds on OpenFlutter's [k_chart](https://github.com/OpenFlutter/k_chart). The current chart implementation and mobile interface were ported from AIGun.
