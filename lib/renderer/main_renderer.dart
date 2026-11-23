@@ -1,7 +1,22 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
+
+import '../candlestick_widget.dart'
+    show ChartValueType, MainState, PriceFormatter;
 import '../entity/candle_entity.dart';
-import '../candlestick_widget.dart' show MainState, PriceFormatter;
+import '../entity/k_line_entity.dart';
+import '../indicators/indicator_presentation.dart';
+import '../indicators/indicator_values.dart';
 import 'base_chart_renderer.dart';
+import 'price_axis.dart';
+
+part 'main_renderer_calculate_dynamic_shadow_width_1.dart';
+part 'main_renderer_indicators.dart';
+part 'main_renderer_price_axis.dart';
+part 'main_renderer_series.dart';
+part 'main_renderer_batch.dart';
+part 'main_renderer_cache.dart';
 
 /// 纵轴文字对齐方式枚举
 enum VerticalTextAlignment { left, right }
@@ -24,45 +39,6 @@ double? trendLineContentRec;
 /// - 技术指标（MA、BOLL、SAR）
 /// - 价格文字和网格
 class MainRenderer extends BaseChartRenderer<CandleEntity> {
-  /// 蜡烛实体的宽度（像素）
-  late double mCandleWidth;
-
-  /// 蜡烛影线的宽度（像素）
-  late double mCandleLineWidth;
-
-  /// 要显示的主图指标列表
-  List<MainState> stateLi;
-
-  /// 是否为分时图模式（true = 折线图，false = 蜡烛图）
-  bool isLine;
-
-  /// 实际绘制的内容区域（去除了上下 padding）
-  late Rect _contentRect;
-
-  /// 内容区域的上下内边距（像素）
-  double _contentPadding = 5.0;
-
-  /// MA 均线的周期列表（例如 [5, 10, 20]）
-  List<int> maDayList;
-
-  /// 图表样式配置
-  final ChartStyle chartStyle;
-
-  /// 图表颜色配置
-  final ChartColors chartColors;
-
-  /// 分时图折线的宽度
-  final double mLineStrokeWidth = 1.0;
-
-  /// 水平缩放倍数
-  double scaleX;
-
-  /// 分时图折线的画笔
-  late Paint mLinePaint;
-
-  /// 纵轴文字对齐方式
-  final VerticalTextAlignment verticalTextAlignment;
-
   /// 主图渲染器构造函数
   /// [mainRect] 主图区域矩形
   /// [maxValue] 可见范围内的最大价格
@@ -90,7 +66,12 @@ class MainRenderer extends BaseChartRenderer<CandleEntity> {
       this.scaleX,
       this.verticalTextAlignment,
       [this.maDayList = const [5, 10, 20],
-      PriceFormatter? priceFormatter])
+      PriceFormatter? priceFormatter,
+      this.valueType = ChartValueType.price,
+      this.mcapFactor = 1.0,
+      this.mcapFormatter,
+      this.chartData,
+      this.indicatorTextFormatter])
       : super(
             chartRect: mainRect,
             maxValue: maxValue,
@@ -100,15 +81,17 @@ class MainRenderer extends BaseChartRenderer<CandleEntity> {
             gridColor: chartColors.gridColor,
             priceFormatter: priceFormatter) {
     // 初始化蜡烛图参数
-    mCandleWidth = this.chartStyle.candleWidth;
-    mCandleLineWidth = this.chartStyle.candleLineWidth;
+    mCandleWidth = chartStyle.candleWidth;
+    mCandleLineWidth = chartStyle.candleLineWidth;
+    _shadowWidth = _calculateDynamicShadowWidth();
+    _indicatorWidth = _calculateMainIndicatorWidth();
 
     // 初始化分时图画笔
     mLinePaint = Paint()
       ..isAntiAlias = true // 开启抗锯齿
       ..style = PaintingStyle.stroke // 描边模式
       ..strokeWidth = mLineStrokeWidth
-      ..color = this.chartColors.kLineColor;
+      ..color = chartColors.kLineColor;
 
     // 计算实际绘制区域（去除上下 padding）
     _contentRect = Rect.fromLTRB(
@@ -117,78 +100,76 @@ class MainRenderer extends BaseChartRenderer<CandleEntity> {
         chartRect.right,
         chartRect.bottom - _contentPadding);
 
-    // 处理极端情况：最大值等于最小值时，扩大范围避免除零
-    if (maxValue == minValue) {
-      maxValue *= 1.5;
-      minValue /= 2;
-    }
-
-    // 计算 Y 轴缩放比例：像素高度 / 价格范围
-    scaleY = _contentRect.height / (maxValue - minValue);
+    // Base renderer normalizes zero-width and unavailable ranges.
+    scaleY = _contentRect.height / (this.maxValue - this.minValue);
+    // Legacy trend-line gestures read these values between frames.
+    updateTrendLineData();
   }
+
+  /// 蜡烛实体的宽度（像素）
+  late double mCandleWidth;
+  late final double _shadowWidth, _indicatorWidth;
+
+  /// 蜡烛影线的宽度（像素）
+  late double mCandleLineWidth;
+
+  /// 要显示的主图指标列表
+  List<MainState> stateLi;
+
+  /// 最近一次绘制的主图指标标签区域（画布坐标），仅供测试校验遮挡关系。
+  List<Rect> debugIndicatorLabelRects = const [];
+
+  /// 价格刻度线 Y（画布坐标），由 painter 按标签高度解析后写入；主图网格横线
+  /// 与价格标签共用，保证二者对齐。
+  List<double> priceAxisLineYs = const [];
+
+  /// Fixed nice prices; null supports callers supplying pixel tick lines.
+  List<double>? priceAxisValues;
+
+  /// 是否为分时图模式（true = 折线图，false = 蜡烛图）
+  bool isLine;
+
+  /// 实际绘制的内容区域（去除了上下 padding）
+  late Rect _contentRect;
+
+  /// 内容区域的上下内边距（像素）
+  final double _contentPadding = 5.0;
+
+  /// MA 均线的周期列表（例如 [5, 10, 20]）
+  List<int> maDayList;
+
+  /// 图表样式配置
+  final ChartStyle chartStyle;
+
+  /// 图表颜色配置
+  final ChartColors chartColors;
+
+  /// 分时图折线的视觉宽度。画布只做水平缩放（scale(scaleX, 1.0)），折线的
+  /// 竖向厚度就等于 strokeWidth 本身，因此按常量绘制即可保证缩放时观感不变。
+  final double mLineStrokeWidth = 2.0;
+
+  /// 水平缩放倍数
+  double scaleX;
+
+  /// 分时图折线的画笔
+  late Paint mLinePaint;
+
+  /// 纵轴文字对齐方式
+  final VerticalTextAlignment verticalTextAlignment;
+
+  /// 当前显示的数据维度
+  final ChartValueType valueType;
+
+  /// 市值缩放系数
+  final double mcapFactor;
+
+  /// 市值格式化函数
+  final PriceFormatter? mcapFormatter;
+  final List<KLineEntity>? chartData;
+  final String Function(String)? indicatorTextFormatter;
   @override
   void drawText(Canvas canvas, CandleEntity data, double x) {
-    if (isLine == true) return;
-    for (int i = 0; i < stateLi.length; ++i) {
-      TextSpan? span;
-      if (stateLi[i] == MainState.MA) {
-        span = TextSpan(
-          children: _createMATextSpan(data),
-        );
-      } else if (stateLi[i] == MainState.BOLL) {
-        span = TextSpan(
-          children: [
-            if (data.up != 0)
-              TextSpan(
-                  text: "BOLL:${format(data.mb)}    ",
-                  style: getTextStyle(this.chartColors.ma5Color)),
-            if (data.mb != 0)
-              TextSpan(
-                  text: "UB:${format(data.up)}    ",
-                  style: getTextStyle(this.chartColors.ma10Color)),
-            if (data.dn != 0)
-              TextSpan(
-                  text: "LB:${format(data.dn)}    ",
-                  style: getTextStyle(this.chartColors.ma30Color)),
-          ],
-        );
-      } else if (stateLi[i] == MainState.SAR) {
-        span = TextSpan(
-          text: "SAR:${format(data.sar)}",
-          style: getTextStyle(this.chartColors.sarColor),
-        );
-      }
-      if (span == null) return;
-      TextPainter tp =
-          TextPainter(text: span, textDirection: TextDirection.ltr);
-      tp.layout();
-
-      Offset offset = Offset(x, chartRect.top - topPadding + i * 12);
-
-      canvas.drawRect(
-          Rect.fromLTRB(
-            offset.dx - 2,
-            offset.dy - 2,
-            tp.width + offset.dx + 2,
-            tp.height + offset.dy + 2,
-          ),
-          Paint()..color = this.chartColors.bgColor);
-
-      tp.paint(canvas, offset);
-    }
-  }
-
-  List<InlineSpan> _createMATextSpan(CandleEntity data) {
-    List<InlineSpan> result = [];
-    for (int i = 0; i < (data.maValueList?.length ?? 0); i++) {
-      if (data.maValueList?[i] != 0) {
-        var item = TextSpan(
-            text: "MA${maDayList[i]}:${format(data.maValueList![i])}    ",
-            style: getTextStyle(this.chartColors.getMAColor(i)));
-        result.add(item);
-      }
-    }
-    return result;
+    if (data is KLineEntity) drawIndicatorLabels(canvas, data, x);
   }
 
   @override
@@ -198,17 +179,9 @@ class MainRenderer extends BaseChartRenderer<CandleEntity> {
       drawPolyline(lastPoint.close, curPoint.close, canvas, lastX, curX);
     } else {
       drawCandle(curPoint, canvas, curX);
-
-      /// draw chart main state
-      for (int i = 0; i < stateLi.length; ++i) {
-        if (stateLi[i] == MainState.MA) {
-          drawMaLine(lastPoint, curPoint, canvas, lastX, curX);
-        } else if (stateLi[i] == MainState.BOLL) {
-          drawBollLine(lastPoint, curPoint, canvas, lastX, curX);
-        } else if (stateLi[i] == MainState.SAR) {
-          drawSAR(lastPoint, curPoint, canvas, lastX, curX);
-        }
-      }
+    }
+    if (lastPoint is KLineEntity && curPoint is KLineEntity) {
+      drawIndicators(lastPoint, curPoint, lastX, curX, canvas);
     }
   }
 
@@ -219,8 +192,8 @@ class MainRenderer extends BaseChartRenderer<CandleEntity> {
     ..isAntiAlias = true;
 
   //画折线图
-  drawPolyline(double lastPrice, double curPrice, Canvas canvas, double lastX,
-      double curX) {
+  void drawPolyline(double lastPrice, double curPrice, Canvas canvas,
+      double lastX, double curX) {
 //    drawLine(lastPrice + 100, curPrice + 100, canvas, lastX, curX, ChartColors.kLineColor);
     mLinePath ??= Path();
 
@@ -241,13 +214,10 @@ class MainRenderer extends BaseChartRenderer<CandleEntity> {
       begin: Alignment.topCenter,
       end: Alignment.bottomCenter,
       tileMode: TileMode.clamp,
-      colors: [
-        this.chartColors.lineFillColor,
-        this.chartColors.lineFillInsideColor
-      ],
+      colors: [chartColors.lineFillColor, chartColors.lineFillInsideColor],
     ).createShader(Rect.fromLTRB(
         chartRect.left, chartRect.top, chartRect.right, chartRect.bottom));
-    mLineFillPaint..shader = mLineFillShader;
+    mLineFillPaint.shader = mLineFillShader;
 
     mLineFillPath ??= Path();
 
@@ -261,21 +231,20 @@ class MainRenderer extends BaseChartRenderer<CandleEntity> {
     canvas.drawPath(mLineFillPath!, mLineFillPaint);
     mLineFillPath!.reset();
 
-    canvas.drawPath(mLinePath!,
-        mLinePaint..strokeWidth = (mLineStrokeWidth / scaleX).clamp(0.1, 1.0));
+    canvas.drawPath(mLinePath!, mLinePaint..strokeWidth = mLineStrokeWidth);
     mLinePath!.reset();
   }
 
   void drawMaLine(CandleEntity lastPoint, CandleEntity curPoint, Canvas canvas,
       double lastX, double curX) {
-    final lineWidth = _calculateMainIndicatorWidth();
+    final lineWidth = _indicatorWidth;
     for (int i = 0; i < (curPoint.maValueList?.length ?? 0); i++) {
       if (i == 3) {
         break;
       }
       if (lastPoint.maValueList?[i] != 0) {
         drawLine(lastPoint.maValueList?[i], curPoint.maValueList?[i], canvas,
-            lastX, curX, this.chartColors.getMAColor(i),
+            lastX, curX, chartColors.getMAColor(i),
             lineWidth: lineWidth);
       }
     }
@@ -283,22 +252,33 @@ class MainRenderer extends BaseChartRenderer<CandleEntity> {
 
   void drawBollLine(CandleEntity lastPoint, CandleEntity curPoint,
       Canvas canvas, double lastX, double curX) {
-    final lineWidth = _calculateMainIndicatorWidth();
+    final lineWidth = _indicatorWidth;
     if (lastPoint.up != 0) {
-      drawLine(lastPoint.up, curPoint.up, canvas, lastX, curX,
-          this.chartColors.ma10Color,
+      drawLine(
+          lastPoint.up, curPoint.up, canvas, lastX, curX, chartColors.ma10Color,
           lineWidth: lineWidth);
     }
     if (lastPoint.mb != 0) {
-      drawLine(lastPoint.mb, curPoint.mb, canvas, lastX, curX,
-          this.chartColors.ma5Color,
+      drawLine(
+          lastPoint.mb, curPoint.mb, canvas, lastX, curX, chartColors.ma5Color,
           lineWidth: lineWidth);
     }
     if (lastPoint.dn != 0) {
-      drawLine(lastPoint.dn, curPoint.dn, canvas, lastX, curX,
-          this.chartColors.ma30Color,
+      drawLine(
+          lastPoint.dn, curPoint.dn, canvas, lastX, curX, chartColors.ma30Color,
           lineWidth: lineWidth);
     }
+  }
+
+  /// SAR markers are circular in screen space, independent of candle zoom.
+  @override
+  void drawCircle(Canvas canvas, double curX, double curY, Color color,
+      {double? radius, double? strokeWidth}) {
+    canvas.save();
+    canvas.scale(1 / scaleX, 1);
+    super.drawCircle(canvas, curX * scaleX, curY, color,
+        radius: radius, strokeWidth: strokeWidth);
+    canvas.restore();
   }
 
   /// 绘制 SAR（抛物线转向指标）
@@ -310,60 +290,22 @@ class MainRenderer extends BaseChartRenderer<CandleEntity> {
 
     // 计算当前 K 线的中间价位
     final halfHL = (curPoint.high + curPoint.low) / 2;
-    late final color;
+    late final Color color;
 
     // 根据 SAR 与中间价的关系决定颜色
     if (sar == halfHL) {
-      color = this.chartColors.avgColor; // 相等：中性色
+      color = chartColors.avgColor; // 相等：中性色
     } else if (sar < halfHL) {
-      color = this.chartColors.upColor; // SAR 在下方：看涨（绿色/红色）
+      color = chartColors.upColor; // SAR 在下方：看涨（绿色/红色）
     } else {
-      color = this.chartColors.dnColor; // SAR 在上方：看跌（红色/绿色）
+      color = chartColors.dnColor; // SAR 在上方：看跌（红色/绿色）
     }
 
     // 使用动态宽度绘制 SAR 圆点
-    final lineWidth = _calculateMainIndicatorWidth();
+    final lineWidth = _indicatorWidth;
     final radius = lineWidth.clamp(1.5, 3.0); // 圆点半径基于线宽
     drawCircle(canvas, curX, sar, color,
         radius: radius, strokeWidth: lineWidth * 0.5);
-  }
-
-  /// 计算动态影线宽度
-  /// 根据当前缩放级别 (scaleX) 平滑调整影线宽度
-  /// 当缩放到最小时，影线宽度逐渐增加至与实体宽度相同
-  ///
-  /// 算法说明：
-  /// 1. 如果未启用动态调整，返回默认影线宽度
-  /// 2. 如果 scaleX > 过渡起点，返回默认影线宽度（无需调整）
-  /// 3. 如果 scaleX < 过渡终点，返回实体宽度（完全过渡）
-  /// 4. 否则，在过渡区间内进行线性插值
-  ///
-  /// 返回值：当前应该使用的影线宽度
-  double _calculateDynamicShadowWidth() {
-    // 功能未启用时，使用默认宽度
-    if (!this.chartStyle.enableDynamicShadowWidth) {
-      return mCandleLineWidth;
-    }
-
-    final start = this.chartStyle.shadowWidthTransitionStart;
-    final end = this.chartStyle.shadowWidthTransitionEnd;
-
-    // 缩放级别高于过渡起点，使用默认影线宽度
-    if (scaleX >= start) {
-      return mCandleLineWidth;
-    }
-
-    // 缩放级别低于过渡终点，影线宽度等于实体宽度
-    if (scaleX <= end) {
-      return mCandleWidth;
-    }
-
-    // 在过渡区间内，线性插值计算影线宽度
-    // progress: 0.0 (在起点) -> 1.0 (在终点)
-    final progress = (start - scaleX) / (start - end);
-
-    // 从默认影线宽度平滑过渡到实体宽度
-    return mCandleLineWidth + (mCandleWidth - mCandleLineWidth) * progress;
   }
 
   /// 计算主图技术指标的动态线宽
@@ -375,16 +317,16 @@ class MainRenderer extends BaseChartRenderer<CandleEntity> {
   ///
   /// 返回值：应该使用的线条宽度
   double _calculateMainIndicatorWidth() {
-    if (!this.chartStyle.enableDynamicMainIndicatorWidth) {
-      return this.chartStyle.mainIndicatorBaseWidth;
+    if (!chartStyle.enableDynamicMainIndicatorWidth) {
+      return chartStyle.mainIndicatorBaseWidth;
     }
 
     // 基础宽度 / scaleX，补偿缩放
-    final baseWidth = this.chartStyle.mainIndicatorBaseWidth / scaleX;
+    final baseWidth = chartStyle.mainIndicatorBaseWidth / scaleX;
 
     // 最大宽度 = min(固定上限, K 线实体宽度)
-    final maxWidth = this.chartStyle.mainIndicatorMaxWidth < mCandleWidth
-        ? this.chartStyle.mainIndicatorMaxWidth
+    final maxWidth = chartStyle.mainIndicatorMaxWidth < mCandleWidth
+        ? chartStyle.mainIndicatorMaxWidth
         : mCandleWidth;
 
     // 限制最大宽度，最小宽度使用较小的值保证细线效果
@@ -407,7 +349,7 @@ class MainRenderer extends BaseChartRenderer<CandleEntity> {
 
     // ===== 动态影线宽度计算 =====
     // 根据缩放级别平滑调整影线宽度，缩放越小影线越粗
-    double lineR = _calculateDynamicShadowWidth() / 2; // 影线半宽
+    double lineR = _shadowWidth / 2; // 影线半宽
 
     // ===== 阳线（涨）：开盘价 >= 收盘价 =====
     if (open >= close) {
@@ -416,15 +358,13 @@ class MainRenderer extends BaseChartRenderer<CandleEntity> {
         open = close + mCandleLineWidth;
       }
 
-      chartPaint.color = this.chartColors.upColor;
-
-      // 绘制实体矩形（从收盘价到开盘价）
-      canvas.drawRect(
-          Rect.fromLTRB(curX - r, close, curX + r, open), chartPaint);
-
-      // 绘制上下影线（从最高价到最低价）
-      canvas.drawRect(
-          Rect.fromLTRB(curX - lineR, high, curX + lineR, low), chartPaint);
+      _drawCandleBody(
+        canvas,
+        body: Rect.fromLTRB(curX - r, close, curX + r, open),
+        shadow: Rect.fromLTRB(curX - lineR, high, curX + lineR, low),
+        color: chartColors.upColor,
+        bodyStyle: chartStyle.riseCandleBodyStyle,
+      );
     }
     // ===== 阴线（跌）：收盘价 > 开盘价 =====
     else if (close > open) {
@@ -433,58 +373,58 @@ class MainRenderer extends BaseChartRenderer<CandleEntity> {
         open = close - mCandleLineWidth;
       }
 
-      chartPaint.color = this.chartColors.dnColor;
-
-      // 绘制实体矩形（从开盘价到收盘价）
-      canvas.drawRect(
-          Rect.fromLTRB(curX - r, open, curX + r, close), chartPaint);
-
-      // 绘制上下影线
-      canvas.drawRect(
-          Rect.fromLTRB(curX - lineR, high, curX + lineR, low), chartPaint);
+      _drawCandleBody(
+        canvas,
+        body: Rect.fromLTRB(curX - r, open, curX + r, close),
+        shadow: Rect.fromLTRB(curX - lineR, high, curX + lineR, low),
+        color: chartColors.dnColor,
+        bodyStyle: chartStyle.fallCandleBodyStyle,
+      );
     }
+  }
+
+  void _drawCandleBody(
+    Canvas canvas, {
+    required Rect body,
+    required Rect shadow,
+    required Color color,
+    required CandleBodyStyle bodyStyle,
+  }) {
+    chartPaint
+      ..color = color
+      ..style = PaintingStyle.fill
+      ..strokeWidth = mCandleLineWidth;
+
+    if (bodyStyle == CandleBodyStyle.filled) {
+      canvas.drawRect(body, chartPaint);
+      canvas.drawRect(shadow, chartPaint);
+      return;
+    }
+
+    canvas.drawRect(shadow, chartPaint);
+    canvas.drawRect(
+      body,
+      chartPaint
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = mCandleLineWidth,
+    );
+    chartPaint.style = PaintingStyle.fill;
   }
 
   @override
   void drawVerticalText(canvas, textStyle, int gridRows) {
-    double rowSpace = chartRect.height / gridRows;
-    for (var i = 0; i <= gridRows; ++i) {
-      double value = (gridRows - i) * rowSpace / scaleY + minValue;
-      TextSpan span = TextSpan(text: "${format(value)}", style: textStyle);
-      TextPainter tp =
-          TextPainter(text: span, textDirection: TextDirection.ltr);
-      tp.layout();
-
-      double offsetX;
-      switch (verticalTextAlignment) {
-        case VerticalTextAlignment.left:
-          offsetX = 0;
-          break;
-        case VerticalTextAlignment.right:
-          offsetX = chartRect.width - tp.width;
-          break;
-      }
-
-      if (i == 0) {
-        tp.paint(canvas, Offset(offsetX, topPadding));
-      } else {
-        tp.paint(
-            canvas, Offset(offsetX, rowSpace * i - tp.height + topPadding));
-      }
-    }
+    drawPriceAxisLabels(canvas, textStyle, priceAxisTargetValues());
   }
 
   @override
   void drawGrid(Canvas canvas, int gridRows, int gridColumns) {
-//    final int gridRows = 4, gridColumns = 4;
-    double rowSpace = chartRect.height / gridRows;
-    for (int i = 0; i <= gridRows; i++) {
-      canvas.drawLine(Offset(0, rowSpace * i + topPadding),
-          Offset(chartRect.width, rowSpace * i + topPadding), gridPaint);
+    for (final y in priceAxisLineYs) {
+      if (y < chartRect.top || y > chartRect.bottom) continue;
+      canvas.drawLine(Offset(0, y), Offset(chartRect.width, y), gridPaint);
     }
     double columnSpace = chartRect.width / gridColumns;
 
-    for (int i = 0; i <= columnSpace; i++) {
+    for (int i = 0; i <= gridColumns; i++) {
       canvas.drawLine(Offset(columnSpace * i, 0),
           Offset(columnSpace * i, chartRect.bottom), gridPaint);
     }
@@ -492,8 +432,6 @@ class MainRenderer extends BaseChartRenderer<CandleEntity> {
 
   @override
   double getY(double y) {
-    //For TrendLine
-    updateTrendLineData();
     return (maxValue - y) * scaleY + _contentRect.top;
   }
 
@@ -503,3 +441,4 @@ class MainRenderer extends BaseChartRenderer<CandleEntity> {
     trendLineContentRec = _contentRect.top;
   }
 }
+// ignore_for_file: type_annotate_public_apis

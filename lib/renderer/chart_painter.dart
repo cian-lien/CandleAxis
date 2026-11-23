@@ -1,28 +1,51 @@
 import 'dart:async' show StreamSink;
 import 'dart:math' as math;
+import 'dart:ui' show ClipOp;
 
-import 'package:candlestick/utils/number_util.dart';
 import 'package:flutter/material.dart';
 
 import '../candlestick_widget.dart'
-    show PriceFormatter, NowPriceAlignment, CrossPriceAlignment;
+    show
+        ChartValueType,
+        ChartWatermarkPicture,
+        CrossPriceAlignment,
+        MainState,
+        NowPriceAlignment,
+        PriceFormatter,
+        SecondaryState;
+import '../chart_section_border.dart';
+import '../drawing/drawing.dart';
+import '../drawing/drawing_canvas.dart';
 import '../entity/info_window_entity.dart';
 import '../entity/k_line_entity.dart';
+import '../entity/trade_marker_entity.dart';
 import '../utils/date_format_util.dart';
+import '../utils/number_util.dart';
 import 'base_chart_painter.dart';
 import 'base_chart_renderer.dart';
 import 'base_dimension.dart';
+import 'chart_text_cache.dart';
+import 'chart_watermark_cache.dart';
 import 'main_renderer.dart';
+import 'price_axis.dart';
 import 'secondary_renderer.dart';
+import 'trade_marker_painter_mixin.dart';
 import 'vol_renderer.dart';
 
+part '../drawing/chart_painter_drawing.dart';
+part 'chart_painter_background.dart';
+part 'chart_painter_crosshair.dart';
+part 'chart_painter_now_price.dart';
+part 'chart_painter_price_axis.dart';
+part 'chart_painter_series.dart';
+part 'chart_painter_trend_line.dart';
+
 class TrendLine {
+  TrendLine(this.p1, this.p2, this.maxHeight, this.scale);
   final Offset p1;
   final Offset p2;
   final double maxHeight;
   final double scale;
-
-  TrendLine(this.p1, this.p2, this.maxHeight, this.scale);
 }
 
 double? trendLineX;
@@ -31,40 +54,13 @@ double getTrendLineX() {
   return trendLineX ?? 0;
 }
 
-class ChartPainter extends BaseChartPainter {
-  final List<TrendLine> lines; //For TrendLine
-  final bool isTrendLine; //For TrendLine
-  bool isrecordingCord = false; //For TrendLine
-  final double selectY; //For TrendLine
-  static get maxScrollX => BaseChartPainter.maxScrollX;
-  final bool isCrossLocked; // 十字线是否锁定显示
-  late BaseChartRenderer mMainRenderer;
-  BaseChartRenderer? mVolRenderer;
-  Set<BaseChartRenderer> mSecondaryRendererList = {};
-  StreamSink<InfoWindowEntity?> sink;
-  Color? upColor, dnColor;
-  Color? ma5Color, ma10Color, ma30Color;
-  Color? volColor;
-  Color? macdColor, difColor, deaColor, jColor;
-  int fixedLength;
-  List<int> maDayList;
-  final ChartColors chartColors;
-  late Paint selectPointPaint, selectorBorderPaint, nowPricePaint;
-  final ChartStyle chartStyle;
-  final bool hideGrid;
-  final bool showNowPrice;
-  final VerticalTextAlignment verticalTextAlignment;
-  final BaseDimension baseDimension;
-  final PriceFormatter? priceFormatter;
-  final NowPriceAlignment? nowPriceAlignment;
-  final CrossPriceAlignment crossPriceAlignment;
-
+class ChartPainter extends BaseChartPainter with TradeMarkerPainterMixin {
   ChartPainter(
     this.chartStyle,
     this.chartColors, {
-    required this.lines, //For TrendLine
-    required this.isTrendLine, //For TrendLine
-    required this.selectY, //For TrendLine
+    required this.lines,
+    required this.isTrendLine,
+    required this.selectY,
     required this.sink,
     required datas,
     required scaleX,
@@ -82,13 +78,46 @@ class ChartPainter extends BaseChartPainter {
     secondaryStateLi,
     bool isLine = false,
     this.hideGrid = false,
+    this.hidePriceAxis = false,
     this.showNowPrice = true,
+    bool showDateAxis = true,
     this.fixedLength = 2,
     this.maDayList = const [5, 10, 20],
     this.priceFormatter,
     this.nowPriceAlignment,
     this.crossPriceAlignment = CrossPriceAlignment.auto,
     this.isCrossLocked = false,
+    this.crossY,
+    this.valueType = ChartValueType.price,
+    this.mcapFactor = 1.0,
+    this.mcapFormatter,
+    this.amountFormatter,
+    this.tradeMarkers = const [],
+    this.showTradeMarkers = true,
+    this.avgBuyPrice,
+    this.avgSellPrice,
+    this.avgBuyLabel,
+    this.avgSellLabel,
+    this.showAvgPriceLines = true,
+    this.verticalScale = 1.0,
+    this.viewportAnimation = 1.0,
+    super.priceRangeTransition,
+    super.manualPriceRange,
+    super.rangeDatas,
+    this.watermarkText,
+    this.watermarkPicture,
+    this.watermarkCache,
+    this.pixelRatio = 1,
+    this.watermarkBottomInset = 6,
+    this.watermarkColor = const Color(0xFFD9DDDE),
+    this.nowPricePositionProgress = 0.0,
+    this.endpointPulse,
+    Listenable? repaint,
+    this.textCache,
+    this.drawingController,
+    this.separateDrawingLayer = false,
+    this.drawingDatas,
+    this.indicatorTextFormatter,
   }) : super(chartStyle,
             datas: datas,
             scaleX: scaleX,
@@ -103,26 +132,180 @@ class ChartPainter extends BaseChartPainter {
             secondaryStateLi: secondaryStateLi,
             xFrontPadding: xFrontPadding,
             xBackPadding: xBackPadding,
-            isLine: isLine) {
+            showDateAxis: showDateAxis,
+            isLine: isLine,
+            repaint: Listenable.merge([
+              repaint,
+              endpointPulse,
+              if (!separateDrawingLayer) drawingController
+            ])) {
     selectPointPaint = Paint()
       ..isAntiAlias = true
       ..strokeWidth = 0.5
-      ..color = this.chartColors.selectFillColor;
+      ..color = chartColors.selectFillColor;
     selectorBorderPaint = Paint()
       ..isAntiAlias = true
       ..strokeWidth = 0.5
       ..style = PaintingStyle.stroke
-      ..color = this.chartColors.selectBorderColor;
+      ..color = chartColors.selectBorderColor;
     nowPricePaint = Paint()
-      ..strokeWidth = this.chartStyle.nowPriceLineWidth
+      ..strokeWidth = chartStyle.nowPriceLineWidth
       ..isAntiAlias = true;
   }
+  final List<TrendLine> lines;
+  @override
+  final ChartTextCache? textCache;
+  final _secondarySeriesCaches = <SecondaryState, SecondarySeriesCache>{};
+  final _mainSeriesCache = MainSeriesCache();
+  final bool isTrendLine;
+  final double selectY;
+  static double get maxScrollX => BaseChartPainter.maxScrollX;
+  final bool isCrossLocked;
 
-  String formatPrice(double price) {
+  /// 十字横线的自由 Y（屏幕局部坐标）。null = 钉在所选 K 线收盘价；
+  /// 非 null = 跟随手指（由 widget 在锁定拖动/长按时写入）。
+  final double? crossY;
+  late BaseChartRenderer mMainRenderer;
+  BaseChartRenderer? mVolRenderer;
+  // Renderer order matches secondaryStateLi, so a list avoids hash-set
+  // allocation/iteration overhead on every paint.
+  final List<BaseChartRenderer> mSecondaryRendererList = <BaseChartRenderer>[];
+  StreamSink<InfoWindowEntity?> sink;
+  int fixedLength;
+  List<int> maDayList;
+  @override
+  final ChartColors chartColors;
+  late Paint selectPointPaint, selectorBorderPaint, nowPricePaint;
+  final Paint _backgroundPaint = Paint();
+  @override
+  final ChartStyle chartStyle;
+  final bool hideGrid;
+
+  /// 隐藏主图右侧价格刻度。与 [hideGrid] 解耦：折线（分时）模式隐藏网格但
+  /// 保留价格刻度。
+  final bool hidePriceAxis;
+  final bool showNowPrice;
+  final VerticalTextAlignment verticalTextAlignment;
+  @override
+  final BaseDimension baseDimension;
+  final PriceFormatter? priceFormatter;
+  final NowPriceAlignment? nowPriceAlignment;
+  final CrossPriceAlignment crossPriceAlignment;
+  final ChartValueType valueType;
+  final double mcapFactor;
+  final PriceFormatter? mcapFormatter;
+  final PriceFormatter? amountFormatter;
+  final String Function(String)? indicatorTextFormatter;
+  @override
+  final double verticalScale;
+  @override
+  double viewportAnimation;
+  final String? watermarkText;
+  final ChartWatermarkPicture? watermarkPicture;
+  final ChartWatermarkCache? watermarkCache;
+  final double pixelRatio;
+  final Color watermarkColor;
+  final double watermarkBottomInset;
+  double nowPricePositionProgress;
+
+  /// Repaints the endpoint halo without rebuilding widgets; null disables it.
+  final Animation<double>? endpointPulse;
+  List<PriceAxisLabel> priceAxisLabels = const [];
+  @visibleForTesting
+  Rect? nowPriceTagRect;
+  final ChartDrawingController? drawingController;
+  final bool separateDrawingLayer;
+  Object? _drawingGeometryKey;
+  final _drawingGeometryCache = DrawingGeometryCache();
+  final List<KLineEntity>? drawingDatas;
+  @visibleForTesting
+  Offset? endpointDotOffset;
+  @visibleForTesting
+  double get endpointPulseValue => endpointPulse?.value ?? 0.0;
+  @override
+  final List<TradeMarkerEntity> tradeMarkers;
+  @override
+  final bool showTradeMarkers;
+  @override
+  final double? avgBuyPrice, avgSellPrice;
+  @override
+  final String? avgBuyLabel, avgSellLabel;
+  @override
+  final bool showAvgPriceLines;
+  String formatPrice(double price, {int? precision}) {
+    if (valueType == ChartValueType.marketCap) {
+      final mcapValue = price * mcapFactor;
+      if (mcapFormatter != null) return mcapFormatter!(mcapValue);
+      if (priceFormatter != null) return priceFormatter!(mcapValue);
+      return mcapValue.toStringAsFixed(precision ?? fixedLength);
+    }
     if (priceFormatter != null) {
       return priceFormatter!(price);
     }
-    return price.toStringAsFixed(fixedLength);
+    return price.toStringAsFixed(precision ?? fixedLength);
+  }
+
+  @visibleForTesting
+  static double crosshairPriceFromY(
+    double y, {
+    required double chartTop,
+    required double maxValue,
+    required double scaleY,
+  }) {
+    return maxValue - (y - chartTop) / scaleY;
+  }
+
+  /// 十字位置相对基准价的涨跌百分比（带符号，两位小数）。
+  /// refPrice <= 0 时无法计算有意义百分比，返回 null（隐藏百分比行）。
+  @visibleForTesting
+  static String? crosshairChangePercent(double price, double refPrice) {
+    if (refPrice <= 0) return null;
+    final pct = (price - refPrice) / refPrice * 100;
+    return '${pct > 0 ? '+' : ''}${pct.toStringAsFixed(2)}%';
+  }
+
+  double priceFromY(double y) {
+    final renderer = mMainRenderer;
+    return crosshairPriceFromY(
+      y,
+      chartTop: renderer.chartRect.top,
+      maxValue: renderer.maxValue,
+      scaleY: renderer.scaleY,
+    );
+  }
+
+  Rect? crossTagHitRect;
+  double? _lastCrossTagPrice;
+
+  @visibleForTesting
+  Rect? crossPlusCircleRect;
+
+  @visibleForTesting
+  Rect? crossDividerRect;
+
+  bool get _isCrossVisible =>
+      !isTrendLine &&
+      (isLongPress == true ||
+          isCrossLocked ||
+          (isTapShowInfoDialog && isOnTap));
+
+  /// 十字快速交易热区：数值标签与加号按钮均可独立命中。
+  bool isCrossTagHit(Offset position) {
+    if (!_isCrossVisible) return false;
+    if (crossTagHitRect?.contains(position) ?? false) return true;
+    return crossPlusCircleRect?.contains(position) ?? false;
+  }
+
+  double? quickTradePriceForHit(Offset position) {
+    if (!isCrossTagHit(position)) return null;
+    return _lastCrossTagPrice;
+  }
+
+  @override
+  void prepareChart(Size size) {
+    super.prepareChart(size);
+    _updateDrawingCoordinates();
+    _drawingGeometryKey = _drawingKey(size);
   }
 
   @override
@@ -132,7 +315,7 @@ class ChartPainter extends BaseChartPainter {
       fixedLength =
           NumberUtil.getMaxDecimalLength(t.open, t.close, t.high, t.low);
     }
-    mMainRenderer = MainRenderer(
+    final mainRenderer = MainRenderer(
       mMainRect,
       mMainMaxValue,
       mMainMinValue,
@@ -140,13 +323,20 @@ class ChartPainter extends BaseChartPainter {
       mainStateLi.toList(),
       isLine,
       fixedLength,
-      this.chartStyle,
-      this.chartColors,
-      this.scaleX,
+      chartStyle,
+      chartColors,
+      scaleX,
       verticalTextAlignment,
       maDayList,
       priceFormatter,
+      valueType,
+      mcapFactor,
+      mcapFormatter,
+      datas,
+      indicatorTextFormatter,
     );
+    mainRenderer.priceAxisLineYs = _resolvePriceAxisLineYs(mainRenderer);
+    mMainRenderer = mainRenderer..textCache = textCache;
     if (mVolRect != null) {
       mVolRenderer = VolRenderer(
           mVolRect!,
@@ -154,9 +344,10 @@ class ChartPainter extends BaseChartPainter {
           mVolMinValue,
           mChildPadding,
           fixedLength,
-          this.chartStyle,
-          this.chartColors,
-          priceFormatter);
+          chartStyle,
+          chartColors,
+          amountFormatter ?? priceFormatter)
+        ..textCache = textCache;
     }
     mSecondaryRendererList.clear();
     for (int i = 0; i < mSecondaryRectList.length; ++i) {
@@ -171,502 +362,113 @@ class ChartPainter extends BaseChartPainter {
         chartColors,
         scaleX,
         priceFormatter,
-      ));
+        valueType,
+        mcapFactor,
+        mcapFormatter,
+      )..textCache = textCache);
     }
   }
 
   @override
-  void drawBg(Canvas canvas, Size size) {
-    Paint mBgPaint = Paint()..color = chartColors.bgColor;
-    Rect mainRect =
-        Rect.fromLTRB(0, 0, mMainRect.width, mMainRect.height + mTopPadding);
-    canvas.drawRect(mainRect, mBgPaint);
-
-    // 日期行背景（K线图正下方）
-    Rect dateRect = Rect.fromLTRB(
-        0, mMainRect.bottom, size.width, mMainRect.bottom + mDateRowHeight);
-    canvas.drawRect(dateRect, mBgPaint);
-
-    if (mVolRect != null) {
-      Rect volRect = Rect.fromLTRB(
-          0, mVolRect!.top - mChildPadding, mVolRect!.width, mVolRect!.bottom);
-      canvas.drawRect(volRect, mBgPaint);
-    }
-
-    for (int i = 0; i < mSecondaryRectList.length; ++i) {
-      Rect? mSecondaryRect = mSecondaryRectList[i].mRect;
-      Rect secondaryRect = Rect.fromLTRB(0, mSecondaryRect.top - mChildPadding,
-          mSecondaryRect.width, mSecondaryRect.bottom);
-      canvas.drawRect(secondaryRect, mBgPaint);
-    }
-  }
+  void drawBg(Canvas canvas, Size size) => drawBgImpl(canvas, size);
+  @override
+  void drawGrid(canvas) => drawGridImpl(canvas);
 
   @override
-  void drawGrid(canvas) {
-    if (!hideGrid) {
-      mMainRenderer.drawGrid(canvas, mGridRows, mGridColumns);
-      mVolRenderer?.drawGrid(canvas, mGridRows, mGridColumns);
-      mSecondaryRendererList.forEach((element) {
-        element.drawGrid(canvas, mGridRows, mGridColumns);
-      });
+  void drawChart(Canvas canvas, Size size, {bool mainOnly = false}) {
+    _drawChartSeries(canvas, size, [mMainRenderer],
+        clip: mMainRect, cullToClip: mainOnly);
+    if (!mainOnly) {
+      _drawChartSeries(canvas, size, [
+        if (mVolRenderer != null) mVolRenderer!,
+        ...mSecondaryRendererList,
+      ]);
     }
-  }
+    // The endpoint and current-price tag share the displayed Y transform.
+    if (isLine && datas != null && datas!.isNotEmpty) {
+      endpointDotOffset = Offset(
+        (getX(datas!.length - 1) + mTranslateX) * scaleX,
+        mMainRenderer.getY(datas!.last.close),
+      );
+    } else {
+      endpointDotOffset = null;
+    }
 
-  @override
-  void drawChart(Canvas canvas, Size size) {
     canvas.save();
     canvas.translate(mTranslateX * scaleX, 0.0);
     canvas.scale(scaleX, 1.0);
-    for (int i = mStartIndex; datas != null && i <= mStopIndex; i++) {
-      KLineEntity? curPoint = datas?[i];
-      if (curPoint == null) continue;
-      KLineEntity lastPoint = i == 0 ? curPoint : datas![i - 1];
-      double curX = getX(i);
-      double lastX = i == 0 ? curX : getX(i - 1);
-
-      mMainRenderer.drawChart(lastPoint, curPoint, lastX, curX, size, canvas);
-      mVolRenderer?.drawChart(lastPoint, curPoint, lastX, curX, size, canvas);
-      mSecondaryRendererList.forEach((element) {
-        element.drawChart(lastPoint, curPoint, lastX, curX, size, canvas);
-      });
-    }
-
-    if ((isLongPress == true || isCrossLocked || (isTapShowInfoDialog && isOnTap)) &&
+    if ((isLongPress == true ||
+            isCrossLocked ||
+            (isTapShowInfoDialog && isOnTap)) &&
         isTrendLine == false) {
       drawCrossLine(canvas, size);
     }
     if (isTrendLine == true) drawTrendLines(canvas, size);
     canvas.restore();
+    if (!separateDrawingLayer || mainOnly) _drawDrawingObjects(canvas);
   }
 
   @override
-  void drawVerticalText(canvas) {
-    var textStyle = getTextStyle(this.chartColors.defaultTextColor);
-    if (!hideGrid) {
-      mMainRenderer.drawVerticalText(canvas, textStyle, mGridRows);
-    }
-    mVolRenderer?.drawVerticalText(canvas, textStyle, mGridRows);
-    mSecondaryRendererList.forEach((element) {
-      element.drawVerticalText(canvas, textStyle, mGridRows);
-    });
-  }
+  void drawPriceAxis(Canvas canvas) => drawMainPriceAxisImpl(canvas);
+
+  @override
+  void drawVerticalText(canvas) => drawVerticalTextImpl(canvas);
 
   @override
   void drawDate(Canvas canvas, Size size) {
-    if (datas == null) return;
-
-    double columnSpace = size.width / mGridColumns;
-    double startX = getX(mStartIndex) - mPointWidth / 2;
-    double stopX = getX(mStopIndex) + mPointWidth / 2;
-    double x = 0.0;
-    double y = 0.0;
-    for (var i = 0; i <= mGridColumns; ++i) {
-      double translateX = xToTranslateX(columnSpace * i);
-
-      if (translateX >= startX && translateX <= stopX) {
-        int index = indexOfTranslateX(translateX);
-
-        if (datas?[index] == null) continue;
-        TextPainter tp = getTextPainter(getDate(datas![index].time), null);
-        // 日期标签显示在K线图正下方（mMainRect.bottom）
-        y = mMainRect.bottom + (mDateRowHeight - tp.height) / 2;
-        x = columnSpace * i - tp.width / 2;
-        // Prevent date text out of canvas
-        if (x < 0) x = 0;
-        if (x > size.width - tp.width) x = size.width - tp.width;
-        tp.paint(canvas, Offset(x, y));
-      }
-    }
-
-//    double translateX = xToTranslateX(0);
-//    if (translateX >= startX && translateX <= stopX) {
-//      TextPainter tp = getTextPainter(getDate(datas[mStartIndex].id));
-//      tp.paint(canvas, Offset(0, y));
-//    }
-//    translateX = xToTranslateX(size.width);
-//    if (translateX >= startX && translateX <= stopX) {
-//      TextPainter tp = getTextPainter(getDate(datas[mStopIndex].id));
-//      tp.paint(canvas, Offset(size.width - tp.width, y));
-//    }
+    drawDateImpl(canvas, size);
   }
 
-  /// draw the cross line. when user focus
   @override
   void drawCrossLineText(Canvas canvas, Size size) {
-    var index = calculateSelectedX(selectX);
-    KLineEntity point = getItem(index);
-
-    TextPainter tp =
-        getTextPainter(formatPrice(point.close), chartColors.crossTextColor);
-    double textHeight = tp.height;
-    double textWidth = tp.width;
-
-    double w1 = 5;
-    double w2 = 3;
-    double r = textHeight / 2 + w2;
-    double y = getMainY(point.close);
-    double x;
-    // 信息弹窗位置：始终根据十字指针位置动态切换
-    bool infoWindowIsLeft = translateXtoX(getX(index)) >= mWidth / 2;
-    // 价格标签位置：可自定义
-    bool priceTagOnLeft;
-    if (crossPriceAlignment == CrossPriceAlignment.left) {
-      priceTagOnLeft = true;
-    } else if (crossPriceAlignment == CrossPriceAlignment.right) {
-      priceTagOnLeft = false;
-    } else {
-      priceTagOnLeft = infoWindowIsLeft;
-    }
-    if (priceTagOnLeft) {
-      x = 1;
-      Path path = new Path();
-      path.moveTo(x, y - r);
-      path.lineTo(x, y + r);
-      path.lineTo(textWidth + 2 * w1, y + r);
-      path.lineTo(textWidth + 2 * w1 + w2, y);
-      path.lineTo(textWidth + 2 * w1, y - r);
-      path.close();
-      canvas.drawPath(path, selectPointPaint);
-      canvas.drawPath(path, selectorBorderPaint);
-      tp.paint(canvas, Offset(x + w1, y - textHeight / 2));
-    } else {
-      x = mWidth - textWidth - 1 - 2 * w1 - w2;
-      Path path = new Path();
-      path.moveTo(x, y);
-      path.lineTo(x + w2, y + r);
-      path.lineTo(mWidth - 2, y + r);
-      path.lineTo(mWidth - 2, y - r);
-      path.lineTo(x + w2, y - r);
-      path.close();
-      canvas.drawPath(path, selectPointPaint);
-      canvas.drawPath(path, selectorBorderPaint);
-      tp.paint(canvas, Offset(x + w1 + w2, y - textHeight / 2));
-    }
-
-    TextPainter dateTp =
-        getTextPainter(getDate(point.time), chartColors.crossTextColor);
-    textWidth = dateTp.width;
-    r = textHeight / 2;
-    x = translateXtoX(getX(index));
-    // 十字准心日期标签显示在K线图正下方
-    y = mMainRect.bottom;
-
-    if (x < textWidth + 2 * w1) {
-      x = 1 + textWidth / 2 + w1;
-    } else if (mWidth - x < textWidth + 2 * w1) {
-      x = mWidth - 1 - textWidth / 2 - w1;
-    }
-    double baseLine = textHeight / 2;
-    canvas.drawRect(
-        Rect.fromLTRB(x - textWidth / 2 - w1, y, x + textWidth / 2 + w1,
-            y + baseLine + r),
-        selectPointPaint);
-    canvas.drawRect(
-        Rect.fromLTRB(x - textWidth / 2 - w1, y, x + textWidth / 2 + w1,
-            y + baseLine + r),
-        selectorBorderPaint);
-
-    dateTp.paint(canvas, Offset(x - textWidth / 2, y));
-    //Long press to display the details of this data
-    sink.add(InfoWindowEntity(point, isLeft: infoWindowIsLeft));
+    drawCrossLineTextImpl(canvas, size);
   }
 
   @override
   void drawText(Canvas canvas, KLineEntity data, double x) {
-    //Long press to display the data in the press
-    if (isLongPress || isCrossLocked || (isTapShowInfoDialog && isOnTap)) {
-      var index = calculateSelectedX(selectX);
-      data = getItem(index);
+    if (!separateDrawingLayer || drawingController == null) {
+      drawTextImpl(canvas, data, x);
     }
-    //Release to display the last data
-    mMainRenderer.drawText(canvas, data, x);
-    mVolRenderer?.drawText(canvas, data, x);
-    mSecondaryRendererList.forEach((element) {
-      element.drawText(canvas, data, x);
-    });
   }
 
   @override
   void drawMaxAndMin(Canvas canvas) {
-    if (isLine == true) return;
-    //plot maxima and minima
-    double x = translateXtoX(getX(mMainMinIndex));
-    double y = getMainY(mMainLowMinValue);
-    if (x < mWidth / 2) {
-      //draw right
-      TextPainter tp = getTextPainter(
-          "── " + formatPrice(mMainLowMinValue), chartColors.minColor);
-      tp.paint(canvas, Offset(x, y - tp.height / 2));
-    } else {
-      TextPainter tp = getTextPainter(
-          formatPrice(mMainLowMinValue) + " ──", chartColors.minColor);
-      tp.paint(canvas, Offset(x - tp.width, y - tp.height / 2));
-    }
-    x = translateXtoX(getX(mMainMaxIndex));
-    y = getMainY(mMainHighMaxValue);
-    if (x < mWidth / 2) {
-      //draw right
-      TextPainter tp = getTextPainter(
-          "── " + formatPrice(mMainHighMaxValue), chartColors.maxColor);
-      tp.paint(canvas, Offset(x, y - tp.height / 2));
-    } else {
-      TextPainter tp = getTextPainter(
-          formatPrice(mMainHighMaxValue) + " ──", chartColors.maxColor);
-      tp.paint(canvas, Offset(x - tp.width, y - tp.height / 2));
-    }
+    drawMaxAndMinImpl(canvas);
   }
 
   @override
   void drawNowPrice(Canvas canvas) {
-    if (!this.showNowPrice) {
-      return;
-    }
-
-    if (datas == null) {
-      return;
-    }
-
-    double value = datas!.last.close;
-    double y = getMainY(value);
-
-    //view display area boundary value drawing
-    if (y > getMainY(mMainLowMinValue)) {
-      y = getMainY(mMainLowMinValue);
-    }
-
-    if (y < getMainY(mMainHighMaxValue)) {
-      y = getMainY(mMainHighMaxValue);
-    }
-
-    nowPricePaint
-      ..color = value >= datas!.last.open
-          ? this.chartColors.nowPriceUpColor
-          : this.chartColors.nowPriceDnColor;
-    //first draw the horizontal line
-    double startX = 0;
-    final max = -mTranslateX + mWidth / scaleX;
-    final space =
-        this.chartStyle.nowPriceLineSpan + this.chartStyle.nowPriceLineLength;
-    while (startX < max) {
-      canvas.drawLine(
-          Offset(startX, y),
-          Offset(startX + this.chartStyle.nowPriceLineLength, y),
-          nowPricePaint);
-      startX += space;
-    }
-    //repaint the background and text
-    TextPainter tp = getTextPainter(
-      formatPrice(value),
-      this.chartColors.nowPriceTextColor,
-    );
-
-    double offsetX;
-    // 如果设置了 nowPriceAlignment，优先使用它
-    if (nowPriceAlignment != null) {
-      switch (nowPriceAlignment!) {
-        case NowPriceAlignment.left:
-          offsetX = 0;
-          break;
-        case NowPriceAlignment.right:
-          offsetX = mWidth - tp.width;
-          break;
-      }
-    } else {
-      // 否则根据 verticalTextAlignment 自动决定（标签在纵轴对面）
-      switch (verticalTextAlignment) {
-        case VerticalTextAlignment.left:
-          offsetX = mWidth - tp.width;
-          break;
-        case VerticalTextAlignment.right:
-          offsetX = 0;
-          break;
-      }
-    }
-
-    double top = y - tp.height / 2;
-    canvas.drawRect(
-        Rect.fromLTRB(offsetX, top, offsetX + tp.width, top + tp.height),
-        nowPricePaint);
-    tp.paint(canvas, Offset(offsetX, top));
+    drawNowPriceImpl(canvas);
   }
 
-  //For TrendLine
+  @override
+  void drawNowPriceLine(Canvas canvas) {
+    drawNowPriceLineImpl(canvas);
+  }
+
+  @override
+  void drawNowPriceLabel(Canvas canvas) {
+    drawNowPriceLabelImpl(canvas);
+  }
+
+  bool isNowPriceButtonHit(Offset position) {
+    return isNowPriceButtonHitImpl(position);
+  }
+
   void drawTrendLines(Canvas canvas, Size size) {
-    var index = calculateSelectedX(selectX);
-    Paint paintY = Paint()
-      ..color = chartColors.trendLineColor
-      ..strokeWidth = 1
-      ..isAntiAlias = true;
-    double x = getX(index);
-    trendLineX = x;
-
-    double y = selectY;
-    // getMainY(point.close);
-
-    // K-line chart vertical line
-    canvas.drawLine(Offset(x, mTopPadding),
-        Offset(x, size.height - mBottomPadding), paintY);
-    Paint paintX = Paint()
-      ..color = chartColors.trendLineColor
-      ..strokeWidth = 1
-      ..isAntiAlias = true;
-    Paint paint = Paint()
-      ..color = chartColors.trendLineColor
-      ..strokeWidth = 1.0
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round;
-    canvas.drawLine(Offset(-mTranslateX, y),
-        Offset(-mTranslateX + mWidth / scaleX, y), paintX);
-    if (scaleX >= 1) {
-      canvas.drawOval(
-        Rect.fromCenter(
-            center: Offset(x, y), height: 15.0 * scaleX, width: 15.0),
-        paint,
-      );
-    } else {
-      canvas.drawOval(
-        Rect.fromCenter(
-            center: Offset(x, y), height: 10.0, width: 10.0 / scaleX),
-        paint,
-      );
-    }
-    if (lines.isNotEmpty) {
-      lines.forEach((element) {
-        var y1 = -((element.p1.dy - 35) / element.scale) + element.maxHeight;
-        var y2 = -((element.p2.dy - 35) / element.scale) + element.maxHeight;
-        var a = (trendLineMax! - y1) * trendLineScale! + trendLineContentRec!;
-        var b = (trendLineMax! - y2) * trendLineScale! + trendLineContentRec!;
-        var p1 = Offset(element.p1.dx, a);
-        var p2 = Offset(element.p2.dx, b);
-        canvas.drawLine(
-            p1,
-            element.p2 == Offset(-1, -1) ? Offset(x, y) : p2,
-            Paint()
-              ..color = Colors.yellow
-              ..strokeWidth = 2);
-      });
-    }
+    drawTrendLinesImpl(canvas, size);
   }
 
-  ///draw cross lines
+  @override
   void drawCrossLine(Canvas canvas, Size size) {
-    var index = calculateSelectedX(selectX);
-    KLineEntity point = getItem(index);
-    double x = getX(index);
-    double y = getMainY(point.close);
-
-    // 竖线 Paint：补偿 scaleX 对线宽的影响
-    Paint paintY = Paint()
-      ..color = this.chartColors.vCrossColor
-      ..strokeWidth = this.chartStyle.vCrossWidth / scaleX
-      ..isAntiAlias = true;
-
-    // 横线 Paint：保持原始线宽
-    Paint paintX = Paint()
-      ..color = this.chartColors.hCrossColor
-      ..strokeWidth = this.chartStyle.hCrossWidth
-      ..isAntiAlias = true;
-
-    if (chartStyle.crossLineDash) {
-      // 竖线虚线：补偿 dashLength 和 dashSpace
-      _drawDashedLineCompensated(
-        canvas,
-        Offset(x, mTopPadding),
-        Offset(x, size.height - mBottomPadding),
-        paintY,
-        scaleX,
-      );
-      // 横线虚线：补偿 scaleX 拉伸，保持与竖线样式一致
-      _drawDashedLineHorizontalCompensated(canvas, Offset(-mTranslateX, y),
-          Offset(-mTranslateX + mWidth / scaleX, y), paintX, scaleX);
-    } else {
-      // 实线绘制
-      canvas.drawLine(Offset(x, mTopPadding),
-          Offset(x, size.height - mBottomPadding), paintY);
-      canvas.drawLine(Offset(-mTranslateX, y),
-          Offset(-mTranslateX + mWidth / scaleX, y), paintX);
-    }
-
-    // 绘制中心圆点：使用 drawOval 补偿 scaleX，保持视觉上的圆形
-    Paint paintDot = Paint()
-      ..color = this.chartColors.hCrossColor
-      ..style = PaintingStyle.fill;
-    double radius = 3.0;
-    // 水平方向除以 scaleX 补偿缩放，垂直方向保持不变
-    canvas.drawOval(
-      Rect.fromCenter(
-        center: Offset(x, y),
-        width: radius * 2 / scaleX,
-        height: radius * 2,
-      ),
-      paintDot,
-    );
-  }
-
-  /// 绘制虚线（带 scaleX 补偿，用于竖线）
-  /// 由于 canvas 已应用 scale(scaleX, 1.0)，竖线的虚线段间距会被压缩
-  /// 此方法通过调整 dashLength 和 dashSpace 来补偿
-  void _drawDashedLineCompensated(
-      Canvas canvas, Offset start, Offset end, Paint paint, double scaleX) {
-    // 补偿 scaleX 对虚线段的影响
-    final dashLength = chartStyle.crossLineDashLength;
-    final dashSpace = chartStyle.crossLineDashSpace;
-
-    final dx = end.dx - start.dx;
-    final dy = end.dy - start.dy;
-    final distance = math.sqrt(dx * dx + dy * dy);
-    final unitX = dx / distance;
-    final unitY = dy / distance;
-
-    double currentDistance = 0;
-    while (currentDistance < distance) {
-      final segmentEnd = (currentDistance + dashLength).clamp(0.0, distance);
-      canvas.drawLine(
-        Offset(start.dx + unitX * currentDistance,
-            start.dy + unitY * currentDistance),
-        Offset(start.dx + unitX * segmentEnd, start.dy + unitY * segmentEnd),
-        paint,
-      );
-      currentDistance += dashLength + dashSpace;
-    }
-  }
-
-  /// 绘制虚线（带 scaleX 补偿，用于横线）
-  /// 由于 canvas 已应用 scale(scaleX, 1.0)，横线的虚线段会被拉伸
-  /// 此方法通过调整 dashLength 和 dashSpace 来补偿，使横线与竖线样式一致
-  void _drawDashedLineHorizontalCompensated(
-      Canvas canvas, Offset start, Offset end, Paint paint, double scaleX) {
-    // 补偿 scaleX 对虚线段的影响（横线沿 X 轴绘制，会被拉伸）
-    final dashLength = chartStyle.crossLineDashLength / scaleX;
-    final dashSpace = chartStyle.crossLineDashSpace / scaleX;
-
-    final dx = end.dx - start.dx;
-    final dy = end.dy - start.dy;
-    final distance = math.sqrt(dx * dx + dy * dy);
-    final unitX = dx / distance;
-    final unitY = dy / distance;
-
-    double currentDistance = 0;
-    while (currentDistance < distance) {
-      final segmentEnd = (currentDistance + dashLength).clamp(0.0, distance);
-      canvas.drawLine(
-        Offset(start.dx + unitX * currentDistance,
-            start.dy + unitY * currentDistance),
-        Offset(start.dx + unitX * segmentEnd, start.dy + unitY * segmentEnd),
-        paint,
-      );
-      currentDistance += dashLength + dashSpace;
-    }
+    drawCrossLineImpl(canvas, size);
   }
 
   TextPainter getTextPainter(text, color) {
-    if (color == null) {
-      color = this.chartColors.defaultTextColor;
-    }
-    TextSpan span = TextSpan(text: "$text", style: getTextStyle(color));
-    TextPainter tp = TextPainter(text: span, textDirection: TextDirection.ltr);
-    tp.layout();
-    return tp;
+    color ??= chartColors.defaultTextColor;
+    TextSpan span = TextSpan(text: '$text', style: getTextStyle(color));
+    return textCache?.layout(span) ??
+        (TextPainter(text: span, textDirection: TextDirection.ltr)..layout());
   }
 
   String getDate(int? date) => dateFormat(
@@ -675,16 +477,15 @@ class ChartPainter extends BaseChartPainter {
         mFormats,
       );
 
+  /// Reuses the initialized renderers and transforms without recalculating
+  /// viewport extrema, animation snapshots or main-chart layout.
+  void paintDrawingMagnifier(Canvas canvas, Size size) {
+    paintDrawingMagnifierImpl(canvas, size);
+  }
+
+  @override
   double getMainY(double y) => mMainRenderer.getY(y);
 
-  /// Whether the point is in the SecondaryRect
-  // bool isInSecondaryRect(Offset point) {
-  //   // return mSecondaryRect.contains(point) == true);
-  //   return false;
-  // }
-
-  /// Whether the point is in MainRect
-  bool isInMainRect(Offset point) {
-    return mMainRect.contains(point);
-  }
+  bool isInMainRect(Offset point) => mMainRect.contains(point);
 }
+// ignore_for_file: overridden_fields, strict_top_level_inference, type_annotate_public_apis

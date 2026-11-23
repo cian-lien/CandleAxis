@@ -4,13 +4,13 @@ class NumberUtil {
   static String format(double n) {
     if (n >= 1000000000) {
       n /= 1000000000;
-      return "${n.toStringAsFixed(2)}B";
+      return '${n.toStringAsFixed(2)}B';
     } else if (n >= 1000000) {
       n /= 1000000;
-      return "${n.toStringAsFixed(2)}M";
+      return '${n.toStringAsFixed(2)}M';
     } else if (n >= 10000) {
       n /= 1000;
-      return "${n.toStringAsFixed(2)}K";
+      return '${n.toStringAsFixed(2)}K';
     } else {
       return n.toStringAsFixed(4);
     }
@@ -18,7 +18,7 @@ class NumberUtil {
 
   static int getDecimalLength(double b) {
     String s = b.toString();
-    int dotIndex = s.indexOf(".");
+    int dotIndex = s.indexOf('.');
     if (dotIndex < 0) {
       return 0;
     } else {
@@ -36,7 +36,7 @@ class NumberUtil {
   static bool checkNotNullOrZero(double? a) {
     if (a == null || a == 0) {
       return false;
-    } else if (a.abs().toStringAsFixed(4) == "0.0000") {
+    } else if (a.abs().toStringAsFixed(4) == '0.0000') {
       return false;
     } else {
       return true;

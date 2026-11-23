@@ -7,13 +7,6 @@ import 'chart_translations.dart';
 import 'entity/depth_entity.dart';
 
 class DepthChart extends StatefulWidget {
-  final List<DepthEntity> bids, asks;
-  final int baseUnit;
-  final int quoteUnit;
-  final Offset offset;
-  final ChartColors chartColors;
-  final DepthChartTranslations chartTranslations;
-
   const DepthChart(
     this.bids,
     this.asks,
@@ -24,6 +17,12 @@ class DepthChart extends StatefulWidget {
     this.offset = const Offset(10, 10),
     this.chartTranslations = const DepthChartTranslations(),
   });
+  final List<DepthEntity> bids, asks;
+  final int baseUnit;
+  final int quoteUnit;
+  final Offset offset;
+  final ChartColors chartColors;
+  final DepthChartTranslations chartTranslations;
 
   @override
   _DepthChartState createState() => _DepthChartState();
@@ -70,38 +69,6 @@ class _DepthChartState extends State<DepthChart> {
 }
 
 class DepthChartPainter extends CustomPainter {
-  //Buy//Sell
-  List<DepthEntity>? mBuyData, mSellData;
-  Offset? pressOffset;
-  bool isLongPress;
-  int baseUnit;
-  int quoteUnit;
-  ChartColors chartColors;
-
-  double mPaddingBottom = 32.0;
-  double mWidth = 0.0, mDrawHeight = 0.0, mDrawWidth = 0.0;
-  double? mBuyPointWidth, mSellPointWidth;
-
-  Offset offset;
-  DepthChartTranslations chartTranslations;
-
-  //最大的委托量
-  //Maximum commission amount
-  double? mMaxVolume, mMultiple;
-
-  //右侧绘制个数
-  int mLineCount = 4;
-
-  Path? mBuyPath, mSellPath;
-
-  //买卖出区域边线绘制画笔  //买卖出取悦绘制画笔
-  Paint? mBuyLinePaint,
-      mSellLinePaint,
-      mBuyPathPaint,
-      mSellPathPaint,
-      selectPaint,
-      selectBorderPaint;
-
   DepthChartPainter(
     this.mBuyData,
     this.mSellData,
@@ -134,12 +101,45 @@ class DepthChartPainter extends CustomPainter {
     mSellPath ??= Path();
     init();
   }
+  //Buy//Sell
+  List<DepthEntity>? mBuyData, mSellData;
+  Offset? pressOffset;
+  bool isLongPress;
+  int baseUnit;
+  int quoteUnit;
+  ChartColors chartColors;
+
+  double mPaddingBottom = 32.0;
+  double mWidth = 0.0, mDrawHeight = 0.0, mDrawWidth = 0.0;
+  double? mBuyPointWidth, mSellPointWidth;
+
+  Offset offset;
+  DepthChartTranslations chartTranslations;
+
+  //最大的委托量
+  //Maximum commission amount
+  double? mMaxVolume, mMultiple;
+
+  //右侧绘制个数
+  int mLineCount = 4;
+
+  Path? mBuyPath, mSellPath;
+
+  //买卖出区域边线绘制画笔  //买卖出取悦绘制画笔
+  Paint? mBuyLinePaint,
+      mSellLinePaint,
+      mBuyPathPaint,
+      mSellPathPaint,
+      selectPaint,
+      selectBorderPaint;
 
   void init() {
     if (mBuyData == null ||
         mBuyData!.isEmpty ||
         mSellData == null ||
-        mSellData!.isEmpty) return;
+        mSellData!.isEmpty) {
+      return;
+    }
     mMaxVolume = mBuyData![0].vol;
     mMaxVolume = max(mMaxVolume!, mSellData!.last.vol);
     mMaxVolume = mMaxVolume! * 1.05;
@@ -160,7 +160,9 @@ class DepthChartPainter extends CustomPainter {
     if (mBuyData == null ||
         mSellData == null ||
         mBuyData!.isEmpty ||
-        mSellData!.isEmpty) return;
+        mSellData!.isEmpty) {
+      return;
+    }
     mWidth = size.width;
     mDrawWidth = mWidth / 2;
     mDrawHeight = size.height - mPaddingBottom;
@@ -410,19 +412,6 @@ class DepthChartPainter extends CustomPainter {
 }
 
 class _PopupPainter {
-  ///setting
-  final double space = 3.5;
-  final double padding = 8.0;
-
-  late final TextPainter pricePaint;
-  late final TextPainter amountPaint;
-  late final ChartColors chartColors;
-
-  ///getter
-  double get width => max(pricePaint.width, amountPaint.width) + 2 * padding;
-  double get height =>
-      pricePaint.height + amountPaint.height + space + 2 * padding;
-
   _PopupPainter({
     required DepthChartTranslations chartTranslations,
     required ChartColors chartColors,
@@ -435,6 +424,19 @@ class _PopupPainter {
     pricePaint.layout();
     amountPaint.layout();
   }
+
+  ///setting
+  final double space = 3.5;
+  final double padding = 8.0;
+
+  late final TextPainter pricePaint;
+  late final TextPainter amountPaint;
+  late final ChartColors chartColors;
+
+  ///getter
+  double get width => max(pricePaint.width, amountPaint.width) + 2 * padding;
+  double get height =>
+      pricePaint.height + amountPaint.height + space + 2 * padding;
 
   void paint(Canvas canvas, Offset offset) {
     pricePaint.paint(canvas, offset + Offset(padding, padding));
@@ -459,3 +461,4 @@ class _PopupPainter {
     );
   }
 }
+// ignore_for_file: library_private_types_in_public_api, prefer_initializing_formals

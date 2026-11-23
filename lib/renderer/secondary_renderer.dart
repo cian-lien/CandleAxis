@@ -1,15 +1,13 @@
 import 'package:flutter/material.dart';
+
+import '../chart_types.dart';
+import '../entity/k_line_entity.dart';
 import '../entity/macd_entity.dart';
-import '../candlestick_widget.dart' show SecondaryState, PriceFormatter;
+import '../indicators/indicator_presentation.dart';
+import '../indicators/indicator_values.dart';
 import 'base_chart_renderer.dart';
 
 class SecondaryRenderer extends BaseChartRenderer<MACDEntity> {
-  late double mMACDWidth;
-  SecondaryState state;
-  final ChartStyle chartStyle;
-  final ChartColors chartColors;
-  final double scaleX;
-
   SecondaryRenderer(
       Rect mainRect,
       double maxValue,
@@ -20,197 +18,214 @@ class SecondaryRenderer extends BaseChartRenderer<MACDEntity> {
       this.chartStyle,
       this.chartColors,
       this.scaleX,
-      [PriceFormatter? priceFormatter])
+      [PriceFormatter? priceFormatter,
+      this.valueType = ChartValueType.price,
+      this.mcapFactor = 1,
+      this.mcapFormatter])
       : super(
-          chartRect: mainRect,
-          maxValue: maxValue,
-          minValue: minValue,
-          topPadding: topPadding,
-          fixedLength: fixedLength,
-          gridColor: chartColors.gridColor,
-          priceFormatter: priceFormatter,
-        ) {
-    mMACDWidth = this.chartStyle.macdWidth;
+            chartRect: mainRect,
+            maxValue: maxValue,
+            minValue: minValue,
+            topPadding: topPadding,
+            fixedLength: fixedLength,
+            gridColor: chartColors.gridColor,
+            priceFormatter: priceFormatter);
+  SecondaryState state;
+  final ChartStyle chartStyle;
+  final ChartColors chartColors;
+  final double scaleX;
+  final ChartValueType valueType;
+  final double mcapFactor;
+  final PriceFormatter? mcapFormatter;
+  double get mMACDWidth => chartStyle.macdWidth;
+
+  double _calculateSecondaryIndicatorWidth() {
+    if (!chartStyle.enableDynamicSecondaryIndicatorWidth) {
+      return chartStyle.secondaryIndicatorBaseWidth;
+    }
+    final width = chartStyle.secondaryIndicatorBaseWidth / scaleX;
+    final cap = chartStyle.secondaryIndicatorMaxWidth < mMACDWidth
+        ? chartStyle.secondaryIndicatorMaxWidth
+        : mMACDWidth;
+    return width > cap ? cap : width;
   }
 
-  /// 计算副图技术指标的动态线宽
-  /// 算法与主图类似，但使用副图独立配置
-  double _calculateSecondaryIndicatorWidth() {
-    if (!this.chartStyle.enableDynamicSecondaryIndicatorWidth) {
-      return this.chartStyle.secondaryIndicatorBaseWidth;
+  Color _color(int i) => switch (i) {
+        0 => chartColors.kColor,
+        1 => chartColors.dColor,
+        2 => chartColors.jColor,
+        _ => chartColors.macdColor,
+      };
+
+  /// One stroke path per series, with independent subpaths preserving caps and
+  /// missing-value gaps. Impeller expands drawRawPoints(lines) into individual
+  /// DrawLine calls, so batching points alone does not reduce raster work.
+  void drawSeries(List<KLineEntity> data, int start, int stop,
+      double pointWidth, Canvas canvas,
+      {SecondarySeriesCache? cache, List<KLineEntity>? historySource}) {
+    if (start > stop) return;
+    final count = secondaryIndicatorLineCount(state);
+    // History stays fixed during a last-candle animation. A replacement painter
+    // (including in-place host updates) owns a fresh cache.
+    final historyStop = stop < data.length - 1 ? stop : stop - 1;
+    final key =
+        (state, start, historyStop, pointWidth, chartRect, maxValue, minValue);
+    final reuse = historySource != null &&
+        cache != null &&
+        identical(cache.source, historySource) &&
+        cache.key == key;
+    final paths = reuse
+        ? cache.paths
+        : _linePaths(data, start, historyStop, pointWidth, count);
+    if (historySource != null && cache != null && !reuse) {
+      cache
+        ..source = historySource
+        ..key = key
+        ..paths = paths;
     }
+    if (state == SecondaryState.MACD) {
+      for (var index = start; index <= stop; index++) {
+        final value = data[index].macd;
+        if (value == null || !value.isFinite) continue;
+        final x = index * pointWidth + pointWidth / 2;
+        final y = getY(value), zero = getY(0);
+        canvas.drawRect(
+            Rect.fromLTRB(x - mMACDWidth / 2, y < zero ? y : zero,
+                x + mMACDWidth / 2, y > zero ? y : zero),
+            chartPaint
+              ..color = value >= 0 ? chartColors.upColor : chartColors.dnColor);
+      }
+    }
+    final tail = stop > historyStop
+        ? _linePaths(data, stop, stop, pointWidth, count)
+        : null;
+    final linePaint = Paint()
+      ..isAntiAlias = true
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = _calculateSecondaryIndicatorWidth();
+    for (var line = 0; line < paths.length; line++) {
+      final paint = linePaint..color = _color(line);
+      final path = paths[line];
+      if (path != null) canvas.drawPath(path, paint);
+      final last = tail?[line];
+      if (last != null) canvas.drawPath(last, paint);
+    }
+  }
 
-    // 基础宽度 / scaleX，补偿缩放
-    final baseWidth = this.chartStyle.secondaryIndicatorBaseWidth / scaleX;
-
-    // 最大宽度 = min(固定上限, MACD 柱宽度)
-    final maxWidth = this.chartStyle.secondaryIndicatorMaxWidth < mMACDWidth
-        ? this.chartStyle.secondaryIndicatorMaxWidth
-        : mMACDWidth;
-
-    // 限制最大宽度
-    return baseWidth > maxWidth ? maxWidth : baseWidth;
+  List<Path?> _linePaths(List<KLineEntity> data, int start, int stop,
+      double pointWidth, int count) {
+    final paths = List<Path?>.filled(count, null);
+    for (var index = start; index <= stop; index++) {
+      final previous = data[index == 0 ? 0 : index - 1], current = data[index];
+      final x = index * pointWidth + pointWidth / 2;
+      for (var line = state == SecondaryState.MACD ? 1 : 0;
+          line < count;
+          line++) {
+        final a = secondaryIndicatorValue(state, previous, line);
+        final b = secondaryIndicatorValue(state, current, line);
+        if (a == null || b == null || !a.isFinite || !b.isFinite) continue;
+        (paths[line] ??= Path())
+          ..moveTo(index == 0 ? x : x - pointWidth, getY(a))
+          ..lineTo(x, getY(b));
+      }
+    }
+    return paths;
   }
 
   @override
   void drawChart(MACDEntity lastPoint, MACDEntity curPoint, double lastX,
       double curX, Size size, Canvas canvas) {
-    final lineWidth = _calculateSecondaryIndicatorWidth();
-    switch (state) {
-      case SecondaryState.MACD:
-        drawMACD(curPoint, canvas, curX, lastPoint, lastX, lineWidth);
-        break;
-      case SecondaryState.KDJ:
-        drawLine(lastPoint.k, curPoint.k, canvas, lastX, curX,
-            this.chartColors.kColor,
-            lineWidth: lineWidth);
-        drawLine(lastPoint.d, curPoint.d, canvas, lastX, curX,
-            this.chartColors.dColor,
-            lineWidth: lineWidth);
-        drawLine(lastPoint.j, curPoint.j, canvas, lastX, curX,
-            this.chartColors.jColor,
-            lineWidth: lineWidth);
-        break;
-      case SecondaryState.RSI:
-        drawLine(lastPoint.rsi, curPoint.rsi, canvas, lastX, curX,
-            this.chartColors.rsiColor,
-            lineWidth: lineWidth);
-        break;
-      case SecondaryState.WR:
-        drawLine(lastPoint.r, curPoint.r, canvas, lastX, curX,
-            this.chartColors.rsiColor,
-            lineWidth: lineWidth);
-        break;
-      case SecondaryState.CCI:
-        drawLine(lastPoint.cci, curPoint.cci, canvas, lastX, curX,
-            this.chartColors.rsiColor,
-            lineWidth: lineWidth);
-        break;
+    if (lastPoint is! KLineEntity || curPoint is! KLineEntity) return;
+    final previous = secondaryIndicatorSeries(state, lastPoint),
+        current = secondaryIndicatorSeries(state, curPoint);
+    final width = _calculateSecondaryIndicatorWidth();
+    for (var i = 0; i < current.length; i++) {
+      if (state == SecondaryState.MACD && i == 0) {
+        final v = current[i].value;
+        if (v == null || !v.isFinite) continue;
+        final y = getY(v), zero = getY(0);
+        canvas.drawRect(
+            Rect.fromLTRB(curX - mMACDWidth / 2, y < zero ? y : zero,
+                curX + mMACDWidth / 2, y > zero ? y : zero),
+            chartPaint
+              ..color = v >= 0 ? chartColors.upColor : chartColors.dnColor);
+      } else {
+        drawLine(
+            previous[i].value, current[i].value, canvas, lastX, curX, _color(i),
+            lineWidth: width);
+      }
     }
   }
 
-  void drawMACD(MACDEntity curPoint, Canvas canvas, double curX,
-      MACDEntity lastPoint, double lastX, double lineWidth) {
-    final macd = curPoint.macd ?? 0;
-    double macdY = getY(macd);
-    double r = mMACDWidth / 2;
-    double zeroy = getY(0);
-    if (macd > 0) {
-      canvas.drawRect(Rect.fromLTRB(curX - r, macdY, curX + r, zeroy),
-          chartPaint..color = this.chartColors.upColor);
-    } else {
-      canvas.drawRect(Rect.fromLTRB(curX - r, zeroy, curX + r, macdY),
-          chartPaint..color = this.chartColors.dnColor);
+  String indicatorValueText(IndicatorSeries s) {
+    final value = s.displayValue(valueType, mcapFactor);
+    if (value == null || !value.isFinite) return '--';
+    // Oscillators and volumes never use the host's price or market cap formatter.
+    if (s.unit != IndicatorUnit.price) {
+      final rounded = value.toStringAsFixed(2);
+      return value != 0 && double.parse(rounded) == 0
+          ? value.toStringAsExponential(3)
+          : rounded;
     }
-    if (lastPoint.dif != 0) {
-      drawLine(lastPoint.dif, curPoint.dif, canvas, lastX, curX,
-          this.chartColors.difColor,
-          lineWidth: lineWidth);
-    }
-    if (lastPoint.dea != 0) {
-      drawLine(lastPoint.dea, curPoint.dea, canvas, lastX, curX,
-          this.chartColors.deaColor,
-          lineWidth: lineWidth);
-    }
+    return valueType == ChartValueType.marketCap && mcapFormatter != null
+        ? mcapFormatter!(value)
+        : format(value);
   }
 
   @override
   void drawText(Canvas canvas, MACDEntity data, double x) {
-    List<TextSpan>? children;
-    switch (state) {
-      case SecondaryState.MACD:
-        children = [
-          TextSpan(
-              text: "MACD(12,26,9)    ",
-              style: getTextStyle(this.chartColors.defaultTextColor)),
-          if (data.macd != 0)
-            TextSpan(
-                text: "MACD:${format(data.macd)}    ",
-                style: getTextStyle(this.chartColors.macdColor)),
-          if (data.dif != 0)
-            TextSpan(
-                text: "DIF:${format(data.dif)}    ",
-                style: getTextStyle(this.chartColors.difColor)),
-          if (data.dea != 0)
-            TextSpan(
-                text: "DEA:${format(data.dea)}    ",
-                style: getTextStyle(this.chartColors.deaColor)),
-        ];
-        break;
-      case SecondaryState.KDJ:
-        children = [
-          TextSpan(
-              text: "KDJ(9,1,3)    ",
-              style: getTextStyle(this.chartColors.defaultTextColor)),
-          if (data.macd != 0)
-            TextSpan(
-                text: "K:${format(data.k)}    ",
-                style: getTextStyle(this.chartColors.kColor)),
-          if (data.dif != 0)
-            TextSpan(
-                text: "D:${format(data.d)}    ",
-                style: getTextStyle(this.chartColors.dColor)),
-          if (data.dea != 0)
-            TextSpan(
-                text: "J:${format(data.j)}    ",
-                style: getTextStyle(this.chartColors.jColor)),
-        ];
-        break;
-      case SecondaryState.RSI:
-        children = [
-          TextSpan(
-              text: "RSI(14):${format(data.rsi)}    ",
-              style: getTextStyle(this.chartColors.rsiColor)),
-        ];
-        break;
-      case SecondaryState.WR:
-        children = [
-          TextSpan(
-              text: "WR(14):${format(data.r)}    ",
-              style: getTextStyle(this.chartColors.rsiColor)),
-        ];
-        break;
-      case SecondaryState.CCI:
-        children = [
-          TextSpan(
-              text: "CCI(14):${format(data.cci)}    ",
-              style: getTextStyle(this.chartColors.rsiColor)),
-        ];
-        break;
-    }
-    TextPainter tp = TextPainter(
-        text: TextSpan(children: children), textDirection: TextDirection.ltr);
-    tp.layout();
+    if (data is! KLineEntity) return;
+    final values = secondaryIndicatorSeries(state, data);
+    final tp = layoutText(TextSpan(children: [
+      for (var i = 0; i < values.length; i++)
+        TextSpan(
+            text: '${values[i].label}:${indicatorValueText(values[i])}    ',
+            style: getTextStyle(_color(i)))
+    ]));
     tp.paint(canvas, Offset(x, chartRect.top - topPadding));
   }
 
   @override
-  void drawVerticalText(canvas, textStyle, int gridRows) {
-    TextPainter maxTp = TextPainter(
-        text: TextSpan(text: "${format(maxValue)}", style: textStyle),
-        textDirection: TextDirection.ltr);
-    maxTp.layout();
-    TextPainter minTp = TextPainter(
-        text: TextSpan(text: "${format(minValue)}", style: textStyle),
-        textDirection: TextDirection.ltr);
-    minTp.layout();
-
+  void drawVerticalText(dynamic canvas, dynamic textStyle, int gridRows) {
+    final unit = switch (state) {
+      SecondaryState.MACD ||
+      SecondaryState.DMA ||
+      SecondaryState.MTM =>
+        IndicatorUnit.price,
+      SecondaryState.OBV => IndicatorUnit.volume,
+      SecondaryState.ROC => IndicatorUnit.percentage,
+      SecondaryState.EMV => IndicatorUnit.priceSquaredPerVolume,
+      _ => IndicatorUnit.oscillator,
+    };
+    final maxTp = layoutText(TextSpan(
+        text: indicatorValueText(IndicatorSeries('', maxValue, unit: unit)),
+        style: textStyle));
+    final minTp = layoutText(TextSpan(
+        text: indicatorValueText(IndicatorSeries('', minValue, unit: unit)),
+        style: textStyle));
     maxTp.paint(canvas,
-        Offset(chartRect.width - maxTp.width, chartRect.top - topPadding));
-    minTp.paint(canvas,
-        Offset(chartRect.width - minTp.width, chartRect.bottom - minTp.height));
+        Offset(chartRect.width - maxTp.width - 10, chartRect.top - topPadding));
+    minTp.paint(
+        canvas,
+        Offset(chartRect.width - minTp.width - 10,
+            chartRect.bottom - minTp.height));
   }
 
   @override
   void drawGrid(Canvas canvas, int gridRows, int gridColumns) {
-    // canvas.drawLine(Offset(0, chartRect.top), Offset(chartRect.width, chartRect.top), gridPaint); //hidden line
     canvas.drawLine(Offset(0, chartRect.bottom),
         Offset(chartRect.width, chartRect.bottom), gridPaint);
-    double columnSpace = chartRect.width / gridColumns;
-    for (int i = 0; i <= columnSpace; i++) {
-      //mSecondaryRect垂直线
-      canvas.drawLine(Offset(columnSpace * i, chartRect.top - topPadding),
-          Offset(columnSpace * i, chartRect.bottom), gridPaint);
+    final space = chartRect.width / gridColumns;
+    for (var i = 0; i <= gridColumns; i++) {
+      canvas.drawLine(Offset(space * i, chartRect.top - topPadding),
+          Offset(space * i, chartRect.bottom), gridPaint);
     }
   }
+}
+
+/// Owned by one painter/input revision; no app-level or global state.
+class SecondarySeriesCache {
+  List<KLineEntity>? source;
+  Object? key;
+  List<Path?> paths = const [];
 }

@@ -1,5 +1,6 @@
-import 'package:candlestick/chart_translations.dart';
 import 'package:flutter/widgets.dart';
+
+import '../chart_translations.dart';
 
 extension ChartTranslationsMap on Map<String, ChartTranslations> {
   ChartTranslations of(BuildContext context) {

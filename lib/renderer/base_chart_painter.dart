@@ -1,71 +1,36 @@
 import 'dart:math';
 
-import 'package:candlestick/utils/date_format_util.dart';
 import 'package:flutter/material.dart'
-    show Color, TextStyle, Rect, Canvas, Size, CustomPainter;
+    show Canvas, Color, CustomPainter, Rect, Size, TextStyle;
 
 import '../candlestick_widget.dart';
 import '../chart_style.dart' show ChartStyle;
 import '../entity/k_line_entity.dart';
+import '../indicators/indicator_presentation.dart';
+import '../utils/date_format_util.dart';
 import 'base_dimension.dart';
+import 'price_range.dart';
 
 export 'package:flutter/material.dart'
-    show Color, required, TextStyle, Rect, Canvas, Size, CustomPainter;
+    show Canvas, Color, CustomPainter, Rect, Size, TextStyle;
 
-/// BaseChartPainter
+part 'base_chart_painter_extrema.dart';
+
+class ChartDateLabel {
+  const ChartDateLabel({
+    required this.index,
+    required this.text,
+    required this.centerX,
+    required this.paintX,
+  });
+
+  final int index;
+  final String text;
+  final double centerX;
+  final double paintX;
+}
+
 abstract class BaseChartPainter extends CustomPainter {
-  static double maxScrollX = 0.0;
-  List<KLineEntity>? datas; // data of chart
-
-  Set<MainState> mainStateLi; //MainState mainState;
-
-  Set<SecondaryState> secondaryStateLi;
-
-  bool volHidden;
-  bool isTapShowInfoDialog;
-  double scaleX = 1.0, scrollX = 0.0, selectX;
-  bool isLongPress = false;
-  bool isOnTap;
-  bool isLine;
-
-  late Rect mMainLabelRect;
-
-  /// Rectangle box of main chart
-  late Rect mMainRect;
-
-  /// Rectangle box of the vol chart
-  Rect? mVolRect;
-
-  /// Secondary list support
-  List<RenderRect> mSecondaryRectList = [];
-  late double mDisplayHeight, mWidth;
-  // padding
-  double mTopPadding = 20.0, mBottomPadding = 20.0, mChildPadding = 12.0;
-  // 日期行高度（K线图下方）
-  double mDateRowHeight = 20.0;
-  // grid: rows - columns
-  int mGridRows = 4, mGridColumns = 4;
-  int mStartIndex = 0, mStopIndex = 0;
-  double mMainMaxValue = double.minPositive, mMainMinValue = double.maxFinite;
-  double mVolMaxValue = double.minPositive, mVolMinValue = double.maxFinite;
-  double mTranslateX = double.minPositive;
-  int mMainMaxIndex = 0, mMainMinIndex = 0;
-  double mMainHighMaxValue = double.minPositive,
-      mMainLowMinValue = double.maxFinite;
-  int mItemCount = 0;
-  double mDataLen = 0.0; // the data occupies the total length of the screen
-  final ChartStyle chartStyle;
-  late double mPointWidth;
-  // format time
-  List<String> mFormats = [yyyy, '-', mm, '-', dd, ' ', HH, ':', nn];
-  double xFrontPadding;
-  double xBackPadding;
-
-  /// base dimension
-  final BaseDimension baseDimension;
-
-  /// constructor BaseChartPainter
-  ///
   BaseChartPainter(
     this.chartStyle, {
     this.datas,
@@ -81,25 +46,104 @@ abstract class BaseChartPainter extends CustomPainter {
     this.volHidden = false,
     this.isTapShowInfoDialog = false,
     this.secondaryStateLi = const <SecondaryState>{},
+    this.showDateAxis = true,
     this.isLine = false,
+    this.verticalScale = 1.0,
+    this.viewportAnimation = 1.0,
+    this.priceRangeTransition,
+    this.manualPriceRange,
+    this.rangeDatas,
+    super.repaint,
   }) {
     mItemCount = datas?.length ?? 0;
-    mPointWidth = this.chartStyle.pointWidth;
-    mTopPadding = this.chartStyle.topPadding +
-        baseDimension.totalLabelHeight; // space to display text of main chart
-    mBottomPadding = this.chartStyle.bottomPadding;
-    mChildPadding = this.chartStyle.childPadding;
-    mDateRowHeight = this.chartStyle.dateRowHeight;
-    mGridRows = this.chartStyle.gridRows;
-    mGridColumns = this.chartStyle.gridColumns;
+    mPointWidth = chartStyle.pointWidth;
+    mTopPadding = chartStyle.topPadding;
+    mBottomPadding = chartStyle.bottomPadding;
+    mChildPadding = chartStyle.childPadding;
+    mDateRowHeight = chartStyle.dateRowHeight;
+    mGridRows = chartStyle.gridRows;
+    mGridColumns = chartStyle.gridColumns;
     mDataLen = mItemCount * mPointWidth;
     initFormats();
   }
+  static double maxScrollX = 0.0;
+  List<KLineEntity>? datas;
 
-  /// init format time
+  Set<MainState> mainStateLi;
+
+  Set<SecondaryState> secondaryStateLi;
+
+  bool volHidden;
+  bool isTapShowInfoDialog;
+  bool showDateAxis;
+  double scaleX = 1.0, scrollX = 0.0, selectX;
+  bool isLongPress = false;
+  bool isOnTap;
+  bool isLine;
+  double verticalScale;
+
+  /// Elapsed transition durations on the shared price-range clock.
+  double viewportAnimation;
+  final PriceRangeTransition? priceRangeTransition;
+  final PriceRange? manualPriceRange;
+
+  /// Final input data used for bounds while candle shapes interpolate.
+  final List<KLineEntity>? rangeDatas;
+  PriceRange? autoPriceRange;
+
+  late Rect mMainLabelRect;
+
+  late Rect mMainRect;
+
+  /// Clamp the whole price tag to the plot, including its painted border.
+  double clampMainPlotY(double rawY, double tagHeight, {double padding = 0}) {
+    final halfHeight = tagHeight / 2 + padding;
+    if (mMainRect.height <= halfHeight * 2) return mMainRect.center.dy;
+    return rawY.clamp(
+        mMainRect.top + halfHeight, mMainRect.bottom - halfHeight);
+  }
+
+  /// 水印文字的实际绘制区域（主图内部左下角），由 drawBg 每帧更新；
+  /// 无水印文字时为 null。
+  Rect? mWatermarkRect;
+
+  Rect? mVolRect;
+
+  List<RenderRect> mSecondaryRectList = [];
+  late double mDisplayHeight, mWidth;
+
+  double mTopPadding = 20.0, mBottomPadding = 20.0, mChildPadding = 12.0;
+
+  double mDateRowHeight = 20.0;
+
+  /// 主图与日期行之间的固定间距：避免主图底边溢出的绘制内容
+  /// （最低价标签、现价胶囊等）压住日期文案。
+  static const double dateRowGap = 6;
+
+  int mGridRows = 4, mGridColumns = 4;
+  int mStartIndex = 0, mStopIndex = 0;
+  double mMainMaxValue = double.minPositive, mMainMinValue = double.maxFinite;
+  double mVolMaxValue = double.minPositive, mVolMinValue = double.maxFinite;
+  double mTranslateX = double.minPositive;
+  int mMainMaxIndex = 0, mMainMinIndex = 0;
+  double mMainHighMaxValue = double.minPositive,
+      mMainLowMinValue = double.maxFinite;
+  int mItemCount = 0;
+  double mDataLen = 0.0;
+  final ChartStyle chartStyle;
+  late double mPointWidth;
+
+  List<String> mFormats = [yyyy, '-', mm, '-', dd, ' ', HH, ':', nn];
+  double xFrontPadding;
+  double xBackPadding;
+
+  List<ChartDateLabel> dateAxisLabels = const <ChartDateLabel>[];
+
+  final BaseDimension baseDimension;
+
   void initFormats() {
-    if (this.chartStyle.dateTimeFormat != null) {
-      mFormats = this.chartStyle.dateTimeFormat!;
+    if (chartStyle.dateTimeFormat != null) {
+      mFormats = chartStyle.dateTimeFormat!;
       return;
     }
 
@@ -112,293 +156,162 @@ abstract class BaseChartPainter extends CustomPainter {
     int secondTime = datas![1].time ?? 0;
     int time = secondTime - firstTime;
     time ~/= 1000;
-    // monthly line
+
     if (time >= 24 * 60 * 60 * 28) {
       mFormats = [yy, '-', mm];
     } else if (time >= 24 * 60 * 60) {
-      // daily line
       mFormats = [yy, '-', mm, '-', dd];
-    } else {
-      // hour line
+    } else if (time >= 60) {
       mFormats = [mm, '-', dd, ' ', HH, ':', nn];
+    } else {
+      // 亚分钟级（如 1 秒 K 线）：需要显示到秒
+      mFormats = [HH, ':', nn, ':', ss];
     }
   }
 
-  /// paint chart
-  @override
-  void paint(Canvas canvas, Size size) {
-    canvas.clipRect(Rect.fromLTRB(0, 0, size.width, size.height));
+  /// Prepare shared geometry before either the base or drawing layer paints.
+  void prepareChart(Size size) {
     mDisplayHeight = size.height - mTopPadding - mBottomPadding;
     mWidth = size.width;
     initRect(size);
     calculateValue();
     initChartRenderer();
+  }
 
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.clipRect(Rect.fromLTRB(0, 0, size.width, size.height));
+    prepareChart(size);
     canvas.save();
     canvas.scale(1, 1);
     drawBg(canvas, size);
     drawGrid(canvas);
     if (datas != null && datas!.isNotEmpty) {
       drawChart(canvas, size);
+      // 买卖点属于成交注记层；均价线和标签始终绘制在其上方。
+      drawTradeMarkers(canvas);
+      // 右侧价格刻度位于买卖点上方，避免成交徽标遮挡坐标轴。
+      drawPriceAxis(canvas);
       drawVerticalText(canvas);
-      drawDate(canvas, size);
+      if (showDateAxis) drawDate(canvas, size);
 
-      drawText(canvas, datas!.last, 5);
       drawMaxAndMin(canvas);
-      drawNowPrice(canvas);
+      drawAvgPriceLines(canvas);
+      drawNowPriceLine(canvas);
+      drawAvgPriceLabels(canvas);
+      drawNowPriceLabel(canvas);
 
       if (isLongPress == true || (isTapShowInfoDialog && isOnTap)) {
         drawCrossLineText(canvas, size);
       }
+      // 指标数值文案位于最顶层：现价虚线、均价线与标签、十字线价格
+      // 标签等都不得遮挡它。
+      drawText(canvas, datas!.last, 5);
     }
     canvas.restore();
   }
 
-  /// init chart renderer
   void initChartRenderer();
 
-  /// draw the background of chart
   void drawBg(Canvas canvas, Size size);
 
-  /// draw the grid of chart
   void drawGrid(canvas);
 
-  /// draw chart
   void drawChart(Canvas canvas, Size size);
 
-  /// draw vertical text
+  /// 主图右侧价格标签。
+  void drawPriceAxis(Canvas canvas);
+
+  /// 量能/副图的纵轴文字。
   void drawVerticalText(canvas);
 
-  /// draw date
   void drawDate(Canvas canvas, Size size);
 
-  /// draw text
   void drawText(Canvas canvas, KLineEntity data, double x);
 
-  /// draw maximum and minimum values
   void drawMaxAndMin(Canvas canvas);
 
-  /// draw the current price
   void drawNowPrice(Canvas canvas);
 
-  /// draw cross line
+  /// 绘制最新价虚线，不绘制最新价 Tag。
+  void drawNowPriceLine(Canvas canvas);
+
+  /// 绘制最新价 Tag，必须晚于所有虚线绘制，避免虚线盖住标签。
+  void drawNowPriceLabel(Canvas canvas);
+
+  /// 绘制平均买入/卖出价参考线（token-pnl 口径的均价，可为空）。
+  void drawAvgPriceLines(Canvas canvas);
+
+  /// 绘制平均买入/卖出价标签。
+  void drawAvgPriceLabels(Canvas canvas);
+
+  /// 绘制叠加在 K 线上的买入/卖出成交点。
+  void drawTradeMarkers(Canvas canvas);
+
   void drawCrossLine(Canvas canvas, Size size);
 
-  /// draw text of the cross line
   void drawCrossLineText(Canvas canvas, Size size);
 
-  /// init the rectangle box to draw chart
   void initRect(Size size) {
-    // 获取基础高度参数
-    double volHeight = baseDimension.mVolumeHeight; // 成交量区域的高度
-    double secondaryHeight = baseDimension.mSecondaryHeight; // 单个副图的高度
+    double volHeight = baseDimension.mVolumeHeight;
+    double secondaryHeight = baseDimension.mSecondaryHeight;
 
-    double mainHeight = mDisplayHeight; // 主图区域的高度
-    mainHeight -= volHeight; // 减去成交量区域的高度
-    mainHeight -= baseDimension.totalSecondaryHeight; // 减去副图区域的高度
-    // 为日期行预留空间
-    mainHeight -= mDateRowHeight;
+    double mainHeight = mDisplayHeight;
+    mainHeight -= volHeight;
+    mainHeight -= baseDimension.totalSecondaryHeight;
 
-    mMainRect = Rect.fromLTRB(
-        0, mTopPadding, mWidth, mTopPadding + mainHeight); // 主图区域的位置和大小
+    if (showDateAxis) {
+      mainHeight -= mDateRowHeight;
+      mainHeight -= dateRowGap;
+    }
 
-    // 日期行位置：mMainRect.bottom 到 mMainRect.bottom + mDateRowHeight
-    // 成交量从日期行下方开始
-    double dateRowBottom = mMainRect.bottom + mDateRowHeight;
+    mMainRect = Rect.fromLTRB(0, mTopPadding, mWidth, mTopPadding + mainHeight);
 
+    double dateRowBottom = mMainRect.bottom;
+    if (showDateAxis) {
+      dateRowBottom += dateRowGap + mDateRowHeight;
+    }
+
+    double panelPadding(double height) => chartStyle.secondaryPanelPadding
+        .clamp(0.0, max(0.0, (height - mChildPadding) / 2))
+        .toDouble();
     if (volHidden != true) {
-      // 创建成交量矩形
-      mVolRect = Rect.fromLTRB(
-          0, dateRowBottom + mChildPadding, mWidth, dateRowBottom + volHeight);
+      final padding = panelPadding(volHeight);
+      mVolRect = Rect.fromLTRB(0, dateRowBottom + mChildPadding + padding,
+          mWidth, dateRowBottom + volHeight - padding);
     }
 
     mSecondaryRectList.clear();
-    // 创建副图矩形列表
     for (int i = 0; i < secondaryStateLi.length; ++i) {
+      final padding = panelPadding(secondaryHeight);
       mSecondaryRectList.add(RenderRect(
         Rect.fromLTRB(
             0,
-            dateRowBottom + volHeight + i * secondaryHeight + mChildPadding,
+            dateRowBottom +
+                volHeight +
+                i * secondaryHeight +
+                mChildPadding +
+                padding,
             mWidth,
-            dateRowBottom + volHeight + i * secondaryHeight + secondaryHeight),
+            dateRowBottom +
+                volHeight +
+                i * secondaryHeight +
+                secondaryHeight -
+                padding),
       ));
     }
   }
 
-  /// calculate values
-  calculateValue() {
-    if (datas == null) return;
-    if (datas!.isEmpty) return;
-    // 更新最大滚动距离，现在包括左侧和右侧的留白区域
-    // maxScrollX = 从最左侧（包含左侧留白）到最右侧（包含右侧留白）的总距离
-    maxScrollX = getMinTranslateX().abs() + getMaxTranslateX();
-    setTranslateXFromScrollX(scrollX);
-    mStartIndex = indexOfTranslateX(xToTranslateX(0));
-    mStopIndex = indexOfTranslateX(xToTranslateX(mWidth));
-    for (int i = mStartIndex; i <= mStopIndex; i++) {
-      var item = datas![i];
-      getMainMaxMinValue(item, i);
-      getVolMaxMinValue(item);
-      for (int idx = 0; idx < mSecondaryRectList.length; ++idx) {
-        getSecondaryMaxMinValue(idx, item);
-      }
-    }
-  }
-
-  /// compute maximum and minimum value
-  void getMainMaxMinValue(KLineEntity item, int i) {
-    double maxPrice = item.high;
-    double minPrice = item.low;
-    for (int i = 0; i < mainStateLi.length; ++i) {
-      if (mainStateLi.elementAt(i) == MainState.MA) {
-        maxPrice = max(maxPrice, _findMaxMA(item.maValueList ?? [0]));
-        minPrice = min(minPrice, _findMinMA(item.maValueList ?? [0]));
-      } else if (mainStateLi.elementAt(i) == MainState.BOLL) {
-        maxPrice = max(maxPrice, item.up ?? 0);
-        minPrice = min(minPrice, item.dn ?? 0);
-      } else if (mainStateLi.elementAt(i) == MainState.SAR) {
-        maxPrice = max(maxPrice, item.sar ?? 0);
-        minPrice = min(minPrice, item.sar ?? 0);
-      }
-    }
-
-    mMainMaxValue = max(mMainMaxValue, maxPrice);
-    mMainMinValue = min(mMainMinValue, minPrice);
-
-    if (mMainHighMaxValue < item.high) {
-      mMainHighMaxValue = item.high;
-      mMainMaxIndex = i;
-    }
-    if (mMainLowMinValue > item.low) {
-      mMainLowMinValue = item.low;
-      mMainMinIndex = i;
-    }
-
-    if (isLine == true) {
-      mMainMaxValue = max(mMainMaxValue, item.close);
-      mMainMinValue = min(mMainMinValue, item.close);
-    }
-  }
-
-  // find maximum of the MA
-  double _findMaxMA(List<double> a) {
-    double result = double.minPositive;
-    for (double i in a) {
-      result = max(result, i);
-    }
-    return result;
-  }
-
-  // find minimum of the MA
-  double _findMinMA(List<double> a) {
-    double result = double.maxFinite;
-    for (double i in a) {
-      result = min(result, i == 0 ? double.maxFinite : i);
-    }
-    return result;
-  }
-
-  // get the maximum and minimum of the Vol value
-  void getVolMaxMinValue(KLineEntity item) {
-    mVolMaxValue = max(mVolMaxValue,
-        max(item.vol, max(item.MA5Volume ?? 0, item.MA10Volume ?? 0)));
-    mVolMinValue = min(mVolMinValue,
-        min(item.vol, min(item.MA5Volume ?? 0, item.MA10Volume ?? 0)));
-  }
-
-  // compute maximum and minimum of secondary value
-  getSecondaryMaxMinValue(int index, KLineEntity item) {
-    SecondaryState secondaryState = secondaryStateLi.elementAt(index);
-    switch (secondaryState) {
-      // MACD
-      case SecondaryState.MACD:
-        if (item.macd != null) {
-          mSecondaryRectList[index].mMaxValue = max(
-              mSecondaryRectList[index].mMaxValue,
-              max(item.macd!, max(item.dif!, item.dea!)));
-          mSecondaryRectList[index].mMinValue = min(
-              mSecondaryRectList[index].mMinValue,
-              min(item.macd!, min(item.dif!, item.dea!)));
-        }
-        break;
-      // KDJ
-      case SecondaryState.KDJ:
-        if (item.d != null) {
-          mSecondaryRectList[index].mMaxValue = max(
-              mSecondaryRectList[index].mMaxValue,
-              max(item.k!, max(item.d!, item.j!)));
-          mSecondaryRectList[index].mMinValue = min(
-              mSecondaryRectList[index].mMinValue,
-              min(item.k!, min(item.d!, item.j!)));
-        }
-        break;
-      // RSI
-      case SecondaryState.RSI:
-        if (item.rsi != null) {
-          mSecondaryRectList[index].mMaxValue =
-              max(mSecondaryRectList[index].mMaxValue, item.rsi!);
-          mSecondaryRectList[index].mMinValue =
-              min(mSecondaryRectList[index].mMinValue, item.rsi!);
-        }
-        break;
-      // WR
-      case SecondaryState.WR:
-        mSecondaryRectList[index].mMaxValue = 0;
-        mSecondaryRectList[index].mMinValue = -100;
-        break;
-      // CCI
-      case SecondaryState.CCI:
-        if (item.cci != null) {
-          mSecondaryRectList[index].mMaxValue =
-              max(mSecondaryRectList[index].mMaxValue, item.cci!);
-          mSecondaryRectList[index].mMinValue =
-              min(mSecondaryRectList[index].mMinValue, item.cci!);
-        }
-        break;
-      // default:
-      //   mSecondaryRectList[index].mMaxValue = 0;
-      //   mSecondaryRectList[index].mMinValue = 0;
-      //   break;
-    }
-  }
-
-  // ========== 坐标系统核心方法 ==========
-  // 坐标系统说明：
-  // 1. 屏幕坐标（x）：用户看到的像素坐标，范围 [0, mWidth]
-  // 2. 逻辑坐标（translateX）：考虑缩放和平移后的坐标
-  // 3. 数据索引（index）：K 线数据在列表中的位置，范围 [0, mItemCount-1]
-  //
-  // 转换关系：
-  // 屏幕坐标 <-> 逻辑坐标 <-> 数据索引
-
-  /// 屏幕坐标转换为逻辑坐标
-  /// [x] 屏幕 X 坐标（像素）
-  /// 返回值：逻辑 X 坐标（考虑缩放和平移）
-  ///
-  /// 公式：translateX = (x / scaleX) - mTranslateX
-  /// - x / scaleX：抵消缩放影响
-  /// - -mTranslateX：抵消平移影响
   double xToTranslateX(double x) => -mTranslateX + x / scaleX;
 
-  /// 逻辑坐标转换为数据索引（入口）
-  /// 使用二分查找，时间复杂度 O(log n)
   int indexOfTranslateX(double translateX) =>
       _indexOfTranslateX(translateX, 0, mItemCount - 1);
 
-  /// 二分查找：通过逻辑坐标查找最接近的数据索引
-  /// 这是性能优化的关键：避免线性搜索 O(n)，使用二分查找 O(log n)
-  ///
-  /// [translateX] 逻辑 X 坐标
-  /// [start] 搜索起始索引
-  /// [end] 搜索结束索引
-  /// 返回值：最接近的数据索引
   int _indexOfTranslateX(double translateX, int start, int end) {
-    // 终止条件1：范围缩小到单个元素
     if (end == start || end == -1) {
       return start;
     }
 
-    // 终止条件2：范围缩小到相邻两个元素，选择更接近的那个
     if (end - start == 1) {
       double startValue = getX(start);
       double endValue = getX(end);
@@ -407,90 +320,40 @@ abstract class BaseChartPainter extends CustomPainter {
           : end;
     }
 
-    // 二分查找递归
     int mid = start + (end - start) ~/ 2;
     double midValue = getX(mid);
 
     if (translateX < midValue) {
-      // 目标在左半部分
       return _indexOfTranslateX(translateX, start, mid);
     } else if (translateX > midValue) {
-      // 目标在右半部分
       return _indexOfTranslateX(translateX, mid, end);
     } else {
-      // 精确匹配
       return mid;
     }
   }
 
-  /// 数据索引转换为逻辑坐标
-  /// [position] 数据索引
-  /// 返回值：该索引对应的逻辑 X 坐标
-  ///
-  /// + mPointWidth / 2：使坐标指向 K 线的中心点
-  /// 这样可以避免第一根和最后一根 K 线显示不完整
   double getX(int position) => position * mPointWidth + mPointWidth / 2;
 
-  /// 根据索引获取 K 线数据
-  /// [position] 数据索引
   KLineEntity getItem(int position) {
     return datas![position];
   }
 
-  /// 滚动偏移转换为平移值
-  /// [scrollX] 滚动偏移量（逻辑单位）
-  ///
-  /// mTranslateX 是实际的平移值，用于 canvas.translate()
-  /// scrollX 是从右边界的偏移量，用户更容易理解
   void setTranslateXFromScrollX(double scrollX) =>
       mTranslateX = scrollX + getMinTranslateX();
 
-  /// 计算最小平移值（即显示最右侧数据时的平移值）
-  /// 返回值：最小平移值（通常为负数）
-  ///
-  /// 公式分析：
-  /// - mDataLen：所有数据的总宽度
-  /// - mWidth / scaleX：屏幕宽度对应的逻辑宽度
-  /// - xFrontPadding / scaleX：右侧留白（动态调整，缩放时保持视觉一致）
-  /// - xBackPadding / scaleX：左侧留白（动态调整，缩放时保持视觉一致）
-  ///
-  /// 动态边距说明：
-  /// - 当 scaleX = 0.5（缩小）时，边距 = 100 / 0.5 = 200（逻辑单位）
-  /// - 当 scaleX = 2.0（放大）时，边距 = 100 / 2.0 = 50（逻辑单位）
-  /// - 屏幕上的实际像素 = 逻辑单位 × scaleX，始终为 100px
-  ///
-  /// 当数据量很少时，返回 0（不需要平移）
   double getMinTranslateX() {
     var x =
         -mDataLen + mWidth / scaleX - mPointWidth / 2 - xFrontPadding / scaleX;
     return x >= 0 ? 0.0 : x;
   }
 
-  /// 计算最大平移值（即显示最左侧数据时的平移值）
-  /// 返回值：最大平移值（正数或0）
-  ///
-  /// 公式分析：
-  /// - xBackPadding / scaleX：左侧留白距离（动态调整）
-  /// - mPointWidth / 2：第一根K线中心点偏移
-  ///
-  /// 这个值表示当第一根K线向右偏移 xBackPadding 距离时的平移量
-  /// 动态调整确保无论缩放级别，视觉上的留白保持一致
   double getMaxTranslateX() {
     return xBackPadding / scaleX - mPointWidth / 2;
   }
 
-  /// 计算用户选中的数据索引（用于十字线）
-  /// [selectX] 用户点击或长按的屏幕 X 坐标
-  /// 返回值：对应的数据索引，限制在可见范围内
-  ///
-  /// 流程：
-  /// 1. 屏幕坐标 -> 逻辑坐标
-  /// 2. 逻辑坐标 -> 数据索引
-  /// 3. 限制在可见范围 [mStartIndex, mStopIndex]
   int calculateSelectedX(double selectX) {
     int mSelectedIndex = indexOfTranslateX(xToTranslateX(selectX));
 
-    // 限制在可见范围内
     if (mSelectedIndex < mStartIndex) {
       mSelectedIndex = mStartIndex;
     }
@@ -501,31 +364,25 @@ abstract class BaseChartPainter extends CustomPainter {
     return mSelectedIndex;
   }
 
-  /// 逻辑坐标转换为屏幕坐标
-  /// [translateX] 逻辑 X 坐标
-  /// 返回值：屏幕 X 坐标（像素）
-  ///
-  /// 公式：x = (translateX + mTranslateX) × scaleX
-  /// - +mTranslateX：应用平移
-  /// - ×scaleX：应用缩放
   double translateXtoX(double translateX) =>
       (translateX + mTranslateX) * scaleX;
 
-  /// define text style
   TextStyle getTextStyle(Color color) {
     return TextStyle(fontSize: 10.0, color: color);
   }
 
   @override
   bool shouldRepaint(BaseChartPainter oldDelegate) {
-    return true;
+    // Live viewport changes reuse this delegate and arrive through repaint.
+    // A replacement delegate represents a widget/configuration change: repaint
+    // conservatively, including mutable styles and in-place data updates.
+    return !identical(this, oldDelegate);
   }
 }
 
-/// Render Rectangle
 class RenderRect {
+  RenderRect(this.mRect);
   Rect mRect;
   double mMaxValue = double.minPositive, mMinValue = double.maxFinite;
-
-  RenderRect(this.mRect);
 }
+// ignore_for_file: strict_top_level_inference, type_annotate_public_apis

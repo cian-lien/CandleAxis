@@ -60,11 +60,8 @@ class KLineEntityImproved extends KEntity {
     final amount = json['amount']?.toDouble();
 
     // 兼容火币数据
-    int? tempTime = json['time']?.toInt();
-    if (tempTime == null) {
-      tempTime = json['id']?.toInt() ?? 0;
-      tempTime = tempTime * 1000;
-    }
+    final int tempTime =
+        json['time']?.toInt() ?? ((json['id']?.toInt() ?? 0) * 1000);
 
     return KLineEntityImproved._(
       open: open,

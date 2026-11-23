@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart' show Color, EdgeInsets;
 
+enum CandleBodyStyle { filled, hollow }
+
 /// ChartColors
 ///
 /// Note:
@@ -10,6 +12,81 @@ import 'package:flutter/material.dart' show Color, EdgeInsets;
 /// Text
 ///
 class ChartColors {
+  /// constructor chart color
+  ChartColors({
+    this.bgColor = const Color(0xffffffff),
+    this.kLineColor = const Color(0xff4C86CD),
+
+    ///
+    this.lineFillColor = const Color(0x554C86CD),
+
+    ///
+    this.lineFillInsideColor = const Color(0x00000000),
+
+    ///
+    this.ma5Color = const Color(0xffE5B767),
+    this.ma10Color = const Color(0xff1FD1AC),
+    this.ma30Color = const Color(0xffB48CE3),
+    // Muted teal/coral keep candle colors legible without feeling overly vivid.
+    this.upColor = const Color(0xFF36A88D),
+    this.dnColor = const Color(0xFFE05B68),
+    this.volColor = const Color(0xff2f8fd5),
+    this.macdColor = const Color(0xff2f8fd5),
+    this.difColor = const Color(0xffE5B767),
+    this.deaColor = const Color(0xff1FD1AC),
+    this.kColor = const Color(0xffE5B767),
+    this.dColor = const Color(0xff1FD1AC),
+    this.jColor = const Color(0xffB48CE3),
+    this.rsiColor = const Color(0xffE5B767),
+    this.defaultTextColor = const Color(0xFF909196),
+    this.nowPriceUpColor = const Color(0xFF36A88D),
+    this.nowPriceDnColor = const Color(0xFFE05B68),
+    this.nowPriceTextColor = const Color(0xffffffff),
+    this.nowPriceColor = const Color(0xFF909196),
+    Color? nowPriceLineColor,
+    this.tradeOverlayOnColor = const Color(0xffffffff),
+    this.sarColor = const Color(0xffE5B767),
+    this.avgColor = const Color(0xff82878e),
+
+    /// SuperTrend 多/空色，与主流行情软件一致用蓝/橙，不与涨跌色混淆
+    this.superTrendUpColor = const Color(0xFF3D8BF2),
+    this.superTrendDnColor = const Color(0xFFF0A040),
+
+    /// trend color
+    this.trendLineColor = const Color(0xFFF89215),
+
+    ///depth color
+    this.depthBuyColor = const Color(0xFF36A88D),
+    this.depthBuyPathColor = const Color(0x3336A88D),
+    this.depthSellColor = const Color(0xFFE05B68),
+    this.depthSellPathColor = const Color(0x33E05B68),
+
+    ///value border color after selection
+    // this.selectBorderColor = const Color(0xFF222223),
+    this.selectBorderColor = const Color.fromARGB(255, 255, 255, 255),
+
+    ///background color when value selected
+    // this.selectFillColor = const Color(0xffffffff),
+    this.selectFillColor = const Color(0xf0f0f0f0),
+
+    ///color of grid
+    // 40% opacity over the background makes the grid roughly 60% lighter.
+    this.gridColor = const Color(0x66D1D3DB),
+
+    ///color of annotation content
+    this.infoWindowNormalColor = const Color(0xFF222223),
+    this.infoWindowTitleColor = const Color(0xFF4D4D4E), //0xFF707070
+    this.infoWindowUpColor = const Color(0xFF36A88D),
+    this.infoWindowDnColor = const Color(0xFFE05B68),
+    this.hCrossColor = const Color(0xFF222223),
+    this.vCrossColor = const Color(0xFF222223),
+    this.crossTextColor = const Color(0xFF222223),
+
+    ///The color of the maximum and minimum values in the current display
+    this.maxColor = const Color(0xFF222223),
+    this.minColor = const Color(0xFF222223),
+  }) : _nowPriceLineColor = nowPriceLineColor;
+
   /// the background color of base chart
   Color bgColor;
 
@@ -40,6 +117,8 @@ class ChartColors {
 
   Color sarColor;
   Color avgColor;
+  Color superTrendUpColor;
+  Color superTrendDnColor;
 
   /// default text color: apply for text at grid
   Color defaultTextColor;
@@ -48,6 +127,16 @@ class ChartColors {
   Color nowPriceUpColor;
   Color nowPriceDnColor;
   Color nowPriceTextColor;
+
+  /// 当前价格虚线/标签底色：固定黑色，不随涨跌变化。
+  Color nowPriceColor;
+
+  /// 现价虚线颜色（浅灰），未设置时回退到 [nowPriceColor]。
+  final Color? _nowPriceLineColor;
+  Color get nowPriceLineColor => _nowPriceLineColor ?? nowPriceColor;
+
+  /// Text color used on filled trade-overlay labels.
+  Color tradeOverlayOnColor;
 
   /// trend color
   Color trendLineColor;
@@ -97,72 +186,6 @@ class ChartColors {
         return ma5Color;
     }
   }
-
-  /// constructor chart color
-  ChartColors({
-    this.bgColor = const Color(0xffffffff),
-    this.kLineColor = const Color(0xff4C86CD),
-
-    ///
-    this.lineFillColor = const Color(0x554C86CD),
-
-    ///
-    this.lineFillInsideColor = const Color(0x00000000),
-
-    ///
-    this.ma5Color = const Color(0xffE5B767),
-    this.ma10Color = const Color(0xff1FD1AC),
-    this.ma30Color = const Color(0xffB48CE3),
-    this.upColor = const Color(0xFF14AD8F),
-    this.dnColor = const Color(0xFFD5405D),
-    this.volColor = const Color(0xff2f8fd5),
-    this.macdColor = const Color(0xff2f8fd5),
-    this.difColor = const Color(0xffE5B767),
-    this.deaColor = const Color(0xff1FD1AC),
-    this.kColor = const Color(0xffE5B767),
-    this.dColor = const Color(0xff1FD1AC),
-    this.jColor = const Color(0xffB48CE3),
-    this.rsiColor = const Color(0xffE5B767),
-    this.defaultTextColor = const Color(0xFF909196),
-    this.nowPriceUpColor = const Color(0xFF14AD8F),
-    this.nowPriceDnColor = const Color(0xFFD5405D),
-    this.nowPriceTextColor = const Color(0xffffffff),
-    this.sarColor = const Color(0xffE5B767),
-    this.avgColor = const Color(0xff82878e),
-
-    /// trend color
-    this.trendLineColor = const Color(0xFFF89215),
-
-    ///depth color
-    this.depthBuyColor = const Color(0xFF14AD8F),
-    this.depthBuyPathColor = const Color(0x3314AD8F),
-    this.depthSellColor = const Color(0xFFD5405D),
-    this.depthSellPathColor = const Color(0x33D5405D),
-
-    ///value border color after selection
-    // this.selectBorderColor = const Color(0xFF222223),
-    this.selectBorderColor = const Color.fromARGB(255, 255, 255, 255),
-
-    ///background color when value selected
-    // this.selectFillColor = const Color(0xffffffff),
-    this.selectFillColor = const Color(0xf0f0f0f0),
-
-    ///color of grid
-    this.gridColor = const Color(0xFFD1D3DB),
-
-    ///color of annotation content
-    this.infoWindowNormalColor = const Color(0xFF222223),
-    this.infoWindowTitleColor = const Color(0xFF4D4D4E), //0xFF707070
-    this.infoWindowUpColor = const Color(0xFF14AD8F),
-    this.infoWindowDnColor = const Color(0xFFD5405D),
-    this.hCrossColor = const Color(0xFF222223),
-    this.vCrossColor = const Color(0xFF222223),
-    this.crossTextColor = const Color(0xFF222223),
-
-    ///The color of the maximum and minimum values in the current display
-    this.maxColor = const Color(0xFF222223),
-    this.minColor = const Color(0xFF222223),
-  });
 }
 
 class ChartStyle {
@@ -172,12 +195,23 @@ class ChartStyle {
 
   double childPadding = 12.0;
 
+  /// 成交量和每张副图上下各自的留白，包含在现有面板高度内。
+  double secondaryPanelPadding = 2.0;
+
   ///point-to-point distance
   double pointWidth = 11.0;
 
   ///candle width
   double candleWidth = 8.5;
   double candleLineWidth = 1.0;
+  CandleBodyStyle riseCandleBodyStyle = CandleBodyStyle.filled;
+  CandleBodyStyle fallCandleBodyStyle = CandleBodyStyle.filled;
+
+  CandleBodyStyle get candleBodyStyle => riseCandleBodyStyle;
+  set candleBodyStyle(CandleBodyStyle value) {
+    riseCandleBodyStyle = value;
+    fallCandleBodyStyle = value;
+  }
 
   ///vol column width
   double volWidth = 8.5;
@@ -194,8 +228,20 @@ class ChartStyle {
   double nowPriceLineSpan = 3.5;
   double nowPriceLineWidth = 1;
 
+  /// 现价虚线专用（细于成交/均价参考线）。
+  double nowPriceDashWidth = 0.55;
+  double nowPriceDashLength = 3.5;
+  double nowPriceDashSpan = 2.5;
+
   int gridRows = 4;
   int gridColumns = 4;
+
+  /// 主图右侧价格标签的期望数量；null 时沿用 `gridRows + 1`。主图高度放不下
+  /// 时按「标签高度 + [priceAxisLabelMinGap]」自动减少，主图网格横线随之对齐。
+  int? priceAxisLabelCount;
+
+  /// 相邻价格标签之间的最小留白（像素）。
+  double priceAxisLabelMinGap = 6;
 
   ///customize the time below
   List<String>? dateTimeFormat;
@@ -207,7 +253,7 @@ class ChartStyle {
   double popupValueFontSize = 10.0;
 
   /// 价格弹窗 - 内边距
-  EdgeInsets popupPadding = const EdgeInsets.fromLTRB(6.0, 6.0, 6.0, 0.0);
+  EdgeInsets popupPadding = const EdgeInsets.all(8);
 
   /// 价格弹窗 - 每行底部间距
   double popupItemSpacing = 3.0;
@@ -272,5 +318,5 @@ class ChartStyle {
 
   /// 日期行高度（显示在K线图正下方）
   /// 设置为 0 则日期显示在图表最底部（传统模式）
-  double dateRowHeight = 20.0;
+  double dateRowHeight = 12.0;
 }

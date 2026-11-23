@@ -1,0 +1,39 @@
+import 'package:candlestick/candlestick_widget.dart';
+import 'package:freezed_annotation/freezed_annotation.dart';
+
+import '../../../../../core/enums/timeframe.dart';
+import '../../../../../shared/domain/value_object/network.dart';
+import '../../../domain/entities/get_candlestick_params.dart';
+
+part 'selection_params_state.freezed.dart';
+
+@freezed
+sealed class SelectionParamsState with _$SelectionParamsState {
+  const factory SelectionParamsState({
+    @Default(null) ChainNetwork? network,
+    @Default(null) String? tokenContractAddress,
+    @Default('300') String? bar, // 默认与 Timeframe.m5 (5分钟=300秒) 匹配
+    @Default(null) String? limit,
+    @Default(null) String? from,
+    @Default(null) String? to,
+    @Default(Timeframe.m5) Timeframe selectedTimeframe,
+    @Default({}) Set<MainState> mainStates,
+    @Default({}) Set<SecondaryState> secondaryStates,
+    @Default(false) bool volHidden,
+    @Default(['VOL']) List<String> secondaryOrder,
+    @Default('okx') String source,
+    List<Timeframe>? availableTimeframes,
+    @Default(false) bool timeframesLoading,
+    @Default(false) bool timeframesFailed,
+  }) = _SelectionParamsState;
+  const SelectionParamsState._();
+
+  GetCandlestickParams toParams() => GetCandlestickParams(
+    network: network,
+    tokenContractAddress: tokenContractAddress,
+    bar: bar,
+    limit: limit,
+    from: from,
+    to: to,
+  );
+}
