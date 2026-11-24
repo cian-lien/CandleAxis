@@ -1,6 +1,6 @@
 # CandleAxis
 
-CandleAxis is a Flutter package for interactive financial charts. It includes the candlestick chart renderer and a standalone iOS and Android demo based on AIGun's chart interface. The demo replays local BTC/USD sample data.
+CandleAxis is a Flutter package for interactive financial charts. It includes a candlestick chart renderer and a standalone iOS and Android demo that replays local BTC/USD sample data.
 
 ## Run the mobile demo
 
@@ -67,4 +67,4 @@ The widget supports drag-to-pan, pinch-to-zoom, crosshair inspection, and price-
 
 ## Acknowledgments
 
-CandleAxis builds on OpenFlutter's [k_chart](https://github.com/OpenFlutter/k_chart). The current chart implementation and mobile interface were ported from AIGun.
+CandleAxis builds on OpenFlutter's [k_chart](https://github.com/OpenFlutter/k_chart).
